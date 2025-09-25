@@ -189,25 +189,60 @@
             <!-- Right Side Navigation -->
             <div class="navbar-nav ms-auto d-flex flex-row">
                 <!-- Notifications -->
-                <div class="nav-item dropdown me-3">
-                    <a class="nav-link position-relative" href="#" id="notificationDropdown" role="button" data-bs-toggle="dropdown">
-                        <i class="bi bi-bell fs-5"></i>
-                        <span class="badge bg-danger rounded-pill notification-badge" id="notificationCount">3</span>
-                    </a>
-                    <ul class="dropdown-menu dropdown-menu-end" style="min-width: 300px;">
-                        <li><h6 class="dropdown-header">Notifications</h6></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <div class="dropdown-item-text">
-                                <small class="text-muted">Your order #1234 is ready for pickup</small>
-                                <br><small class="text-primary">2 minutes ago</small>
-                            </div>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item text-center" href="{% url 'employee:notifications_list' %}">View All Notifications</a></li>
-                    </ul>
+<div class="nav-item dropdown me-3">
+    <a class="nav-link position-relative" href="#" id="notificationDropdown" role="button" data-bs-toggle="dropdown">
+        <i class="bi bi-bell fs-5"></i>
+        <span class="badge bg-danger rounded-pill notification-badge" id="notificationCount">
+            {{ unread_count|default:0 }}
+        </span>
+    </a>
+    <ul class="dropdown-menu dropdown-menu-end p-0" style="min-width: 350px; max-height: 400px; overflow-y: auto;">
+        <li class="dropdown-header px-3 py-2">Notifications</li>
+        <li><hr class="dropdown-divider"></li>
+
+        <!-- Notifications List -->
+        <div id="notificationsListDropdown">
+            {% for notification in notifications %}
+            <div class="dropdown-item d-flex align-items-start notification-item {% if not notification.is_read %}unread{% endif %}" 
+                 data-notification-id="{{ notification.id }}">
+                <div class="notification-icon me-2">
+                    {% if notification.type == 'order' %}
+                        <i class="bi bi-bag text-success"></i>
+                    {% elif notification.type == 'system' %}
+                        <i class="bi bi-gear text-warning"></i>
+                    {% elif notification.type == 'promotion' %}
+                        <i class="bi bi-percent text-info"></i>
+                    {% else %}
+                        <i class="bi bi-bell text-primary"></i>
+                    {% endif %}
                 </div>
-                <div>
+                <div class="flex-grow-1">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <span class="notification-title">{{ notification.title }}</span>
+                        <small class="text-muted ms-2">{{ notification.created_at|timesince }} ago</small>
+                    </div>
+                    <div>
+                        <small class="text-muted">{{ notification.message|truncatechars:50 }}</small>
+                    </div>
+                    {% if not notification.is_read %}
+                    <button class="btn btn-sm btn-outline-primary mt-1" onclick="markAsRead({{ notification.id }})">
+                        <i class="bi bi-check"></i>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            <hr class="my-1">
+            {% empty %}
+            <div class="text-center py-3">
+                <small class="text-muted">You're all caught up! No new notifications.</small>
+            </div>
+            {% endfor %}
+        </div>
+
+        <li><a class="dropdown-item text-center" href="{% url 'employee:notifications_list' %}">View All Notifications</a></li>
+    </ul>
+</div>
+
                                    <!-- Language Switcher -->
 <li class="nav-item dropdown me-3">
     <a class="nav-link dropdown-toggle" href="#" id="languageDropdown" role="button" data-bs-toggle="dropdown">

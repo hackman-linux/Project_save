@@ -110,7 +110,7 @@ def menu_view(request):
 # Replace your existing menu_management function and MenuManagementView with this:
 
 class MenuManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
-    template_name = 'menu/menu_management.html'
+    template_name = 'canteen_admin/menu_management.html'
     
     def test_func(self):
         return self.request.user.is_canteen_admin() or self.request.user.is_superuser
@@ -122,9 +122,10 @@ class MenuManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
         status_filter = self.request.GET.get('status', 'all')
         search_query = self.request.GET.get('search', '')
         
-        # Base queryset
+        today = timezone.now().date()
+
         menu_items = MenuItem.objects.select_related('category').annotate(
-            orders_today=Count('order_items__order__created_at__date=timezone.now().date')
+            orders_today=Count('order_items__order', filter=Q(order_items__order__created_at__date=today))
         )
         
         # Apply filters

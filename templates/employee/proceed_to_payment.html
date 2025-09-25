@@ -1,22 +1,164 @@
 <!-- templates/orders/proceed_to_payment.html -->
-{% extends "base/base.html" %}
+{% extends 'base/base.html' %}
+
+{% block title %}Payment - Order #{{ order.order_number }}{% endblock %}
+
+{% block page_title %}Complete Payment{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'orders:history' %}">Orders</a></li>
+<li class="breadcrumb-item"><a href="{% url 'orders:order_detail' order.id %}">Order #{{ order.order_number }}</a></li>
+<li class="breadcrumb-item active">Payment</li>
+{% endblock %}
 
 {% block content %}
-<div class="container mt-5">
-  <div class="card shadow-sm">
-    <div class="card-body">
-      <h4 class="card-title">Proceed to Payment</h4>
-      <p>Your order <strong>{{ order.order_number }}</strong> has been validated by the canteen admin.</p>
-      <p>Total Amount: <strong>{{ order.total_amount }} FCFA</strong></p>
-      
-      <form method="post" action="#">
-        {% csrf_token %}
-        <button class="btn btn-success" disabled>
-          Pay Now (Payment integration not configured)
-        </button>
-      </form>
-      <p class="text-muted mt-2">⚠️ Ask the administrator to enable the payment gateway.</p>
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <!-- Order Summary Card -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5><i class="bi bi-receipt me-2"></i>Order Summary</h5>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-sm-6"><strong>Order Number:</strong> {{ order.order_number }}</div>
+                    <div class="col-sm-6"><strong>Status:</strong> <span class="badge bg-success">{{ order.get_status_display }}</span></div>
+                </div>
+                
+                <div class="table-responsive mb-3">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Qty</th>
+                                <th>Price</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in order.items.all %}
+                            <tr>
+                                <td>{{ item.menu_item.name }}</td>
+                                <td>{{ item.quantity }}</td>
+                                <td>{{ item.unit_price }} XAF</td>
+                                <td>{{ item.total }} XAF</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr class="table-active">
+                                <th colspan="3">Total Amount</th>
+                                <th>{{ order.total_amount }} XAF</th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Payment Methods Card -->
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="bi bi-credit-card me-2"></i>Choose Payment Method</h5>
+            </div>
+            <div class="card-body">
+                <form id="paymentForm">
+                    {% csrf_token %}
+                    
+                    <!-- Payment Method Selection -->
+                    <div class="mb-4">
+                        <div class="row">
+                            <!-- CamPay Mobile Money (Primary) -->
+                            <div class="col-md-6 mb-3">
+                                <div class="card payment-method-card" data-method="campay">
+                                    <div class="card-body text-center">
+                                        <input type="radio" class="form-check-input" name="payment_method" value="campay" id="campay" checked>
+                                        <label for="campay" class="form-check-label w-100">
+                                            <div class="payment-icon mb-2">
+                                                <i class="bi bi-phone-vibrate fs-1 text-primary"></i>
+                                            </div>
+                                            <h6>CamPay Mobile Money</h6>
+                                            <small class="text-muted">MTN, Orange Money & more</small>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Wallet Balance -->
+                            <div class="col-md-6 mb-3">
+                                <div class="card payment-method-card" data-method="wallet">
+                                    <div class="card-body text-center">
+                                        <input type="radio" class="form-check-input" name="payment_method" value="wallet" id="wallet">
+                                        <label for="wallet" class="form-check-label w-100">
+                                            <div class="payment-icon mb-2">
+                                                <i class="bi bi-wallet2 fs-1 text-success"></i>
+                                            </div>
+                                            <h6>Wallet Balance</h6>
+                                            <small class="text-muted">Current: {{ user.wallet_balance|default:0 }} XAF</small>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Phone Number for Mobile Money -->
+                    <div id="phoneNumberSection" class="mb-3">
+                        <label for="phoneNumber" class="form-label">Phone Number</label>
+                        <input type="tel" class="form-control" id="phoneNumber" name="phone_number" 
+                               placeholder="+237 6XX XXX XXX" required>
+                        <div class="form-text">
+                            Enter your mobile money phone number (MTN, Orange, etc.)
+                        </div>
+                    </div>
+
+                    <!-- Payment Button -->
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg" id="payButton">
+                            <i class="bi bi-credit-card me-2"></i>
+                            Pay {{ order.total_amount }} XAF
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Payment Status Modal -->
+        <div class="modal fade" id="paymentStatusModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Payment Status</h5>
+                    </div>
+                    <div class="modal-body text-center">
+                        <div id="paymentProcessing" style="display: none;">
+                            <div class="spinner-border text-primary mb-3" role="status"></div>
+                            <h6>Processing Payment...</h6>
+                            <p class="text-muted">Please check your phone for payment approval</p>
+                        </div>
+                        <div id="paymentSuccess" style="display: none;">
+                            <i class="bi bi-check-circle-fill text-success fs-1 mb-3"></i>
+                            <h6>Payment Successful!</h6>
+                            <p class="text-muted">Your order has been confirmed</p>
+                        </div>
+                        <div id="paymentFailed" style="display: none;">
+                            <i class="bi bi-x-circle-fill text-danger fs-1 mb-3"></i>
+                            <h6>Payment Failed</h6>
+                            <p class="text-muted" id="failureReason">Please try again</p>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-primary" id="redirectToOrder" style="display: none;">
+                            View Order
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-  </div>
 </div>
 {% endblock %}
+
+{% block extra_css %}
+<style>

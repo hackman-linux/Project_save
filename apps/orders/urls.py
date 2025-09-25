@@ -21,6 +21,9 @@ urlpatterns = [
     path('admin/confirm/<uuid:order_id>/', views.confirm_order, name='confirm_order'),
     path('admin/update-status/<uuid:order_id>/', views.update_order_status, name='update_order_status'),
     path('admin/cancel/<uuid:order_id>/', views.cancel_order, name='cancel_order'),
+    # urls.py
+    path('counts/', views.order_counts, name='order_counts'),
+
     
     # Payment Flow
     path('<uuid:order_id>/payment/', views.proceed_to_payment, name='proceed_to_payment'),  # Step 5: Payment page
@@ -35,4 +38,3 @@ urlpatterns = [
     path('quick-order/<uuid:item_id>/', views.quick_order, name='quick_order_item'),
     path('topup/', views.process_topup, name='process_topup'),  # Redirects to payments app
 ]
-

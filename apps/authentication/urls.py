@@ -69,6 +69,7 @@ system_admin_urlpatterns = [
     path('system-config/', views.system_config, name='system_config'),
     path('analytics/', reports_views.system_admin_reports, name='analytics'),
     path("audit-logs/", views.audit_logs_view, name="audit_logs"),
+    path('counts/', orders_views.order_counts, name='order_counts'),
 ]
 
 # Include role-specific URLs with namespace

@@ -13,6 +13,7 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 import json
 import logging
+from django.db import DatabaseError
 from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
@@ -25,183 +26,62 @@ logger = logging.getLogger(__name__)
 
 @login_required
 def notifications_list(request):
-    """Display user's notifications"""
-    # Get user's notifications
-    notifications = UserNotification.objects.filter(
-        user=request.user
-    ).select_related('notification').order_by('-created_at')
-    
-    # Filter by status
-    status = request.GET.get('status', 'all')
-    if status == 'unread':
-        notifications = notifications.filter(is_read=False)
-    elif status == 'read':
-        notifications = notifications.filter(is_read=True)
-    
-    # Filter by type
-    notification_type = request.GET.get('type', 'all')
-    if notification_type != 'all':
-        notifications = notifications.filter(notification__notification_type=notification_type)
-    
-    # Pagination
+    notifications = Notification.objects.filter(target_user=request.user).order_by('-created_at')
     paginator = Paginator(notifications, 20)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
-    
-    # Get counts
-    unread_count = UserNotification.objects.filter(
-        user=request.user, is_read=False
-    ).count()
-    
     context = {
         'page_obj': page_obj,
-        'status': status,
-        'notification_type': notification_type,
-        'unread_count': unread_count,
-        'notification_types': dict(Notification.NOTIFICATION_TYPE_CHOICES)
-
+        'unread_count': notifications.filter(is_read=False).count(),
     }
-    
     return render(request, 'notifications/list.html', context)
-
 
 @login_required
 def mark_notification_read(request, notification_id):
-    """Mark a notification as read"""
-    if request.method == 'POST':
-        try:
-            user_notification = get_object_or_404(
-                UserNotification, 
-                id=notification_id, 
-                user=request.user
-            )
-            
-            user_notification.mark_as_read()
-            
-            return JsonResponse({
-                'success': True,
-                'message': 'Notification marked as read'
-            })
-            
-        except Exception as e:
-            return JsonResponse({
-                'error': f'Error marking notification as read: {str(e)}'
-            }, status=400)
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
+    notification = get_object_or_404(Notification, id=notification_id, target_user=request.user)
+    notification.mark_as_read()
+    return JsonResponse({'success': True, 'message': 'Marked as read'})
 
 @login_required
 def mark_all_read(request):
-    """Mark all notifications as read"""
     if request.method == 'POST':
         try:
-            UserNotification.objects.filter(
-                user=request.user,
-                is_read=False
-            ).update(
-                is_read=True,
-                read_at=timezone.now()
-            )
-            
+            notifications = Notification.objects.filter(target_user=request.user, is_read=False)
+            for notification in notifications:
+                notification.mark_as_read()
             return JsonResponse({
                 'success': True,
                 'message': 'All notifications marked as read'
             })
-            
         except Exception as e:
             return JsonResponse({
                 'error': f'Error marking notifications as read: {str(e)}'
             }, status=400)
-    
     return JsonResponse({'error': 'Method not allowed'}, status=405)
-
 
 @login_required
 def delete_notification(request, notification_id):
-    """Delete a notification"""
-    if request.method == 'DELETE':
-        try:
-            user_notification = get_object_or_404(
-                UserNotification, 
-                id=notification_id, 
-                user=request.user
-            )
-            
-            user_notification.delete()
-            
-            return JsonResponse({
-                'success': True,
-                'message': 'Notification deleted'
-            })
-            
-        except Exception as e:
-            return JsonResponse({
-                'error': f'Error deleting notification: {str(e)}'
-            }, status=400)
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-
-
-
-@login_required
-def notifications_api(request):
-    """API endpoint for user notifications"""
-    # Get recent notifications
-    notifications = UserNotification.objects.filter(
-        user=request.user
-    ).select_related('notification').order_by('-created_at')[:10]
-    
-    notifications_data = []
-    for user_notification in notifications:
-        notification = user_notification.notification
-        notifications_data.append({
-            'id': str(user_notification.id),
-            'title': notification.title,
-            'message': notification.message,
-            'type': notification.notification_type,
-            'is_read': user_notification.is_read,
-            'created_at': user_notification.created_at.strftime('%b %d, %Y at %I:%M %p'),
-            'priority': notification.priority,
-            'action_url': notification.action_url,
-            'action_text': notification.action_text
-        })
-    
-    # Get unread count
-    unread_count = UserNotification.objects.filter(
-        user=request.user, is_read=False
-    ).count()
-    
-    return JsonResponse({
-        'notifications': notifications_data,
-        'unread_count': unread_count
-    })
-
+    notification = get_object_or_404(Notification, id=notification_id, target_user=request.user)
+    notification.delete()
+    return JsonResponse({'success': True, 'message': 'Deleted'})
 
 @login_required
 def notification_preferences(request):
-    """Manage notification preferences"""
-    user = request.user
-    
+    try:
+        preferences = NotificationPreference.objects.get(user=request.user)
+    except NotificationPreference.DoesNotExist:
+        preferences = NotificationPreference.objects.create(
+            user=request.user,
+            email_enabled=True,
+            push_enabled=True,
+            order_notifications=True,
+            payment_notifications=True,
+            menu_notifications=True,
+            system_notifications=True
+        )
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            
-            # Get or create preferences
-            preferences, created = NotificationPreference.objects.get_or_create(
-                user=user,
-                defaults={
-                    'email_enabled': True,
-                    'push_enabled': True,
-                    'order_notifications': True,
-                    'payment_notifications': True,
-                    'menu_notifications': True,
-                    'system_notifications': True
-                }
-            )
-            
-            # Update preferences
             preferences.email_enabled = data.get('email_enabled', preferences.email_enabled)
             preferences.push_enabled = data.get('push_enabled', preferences.push_enabled)
             preferences.order_notifications = data.get('order_notifications', preferences.order_notifications)
@@ -209,76 +89,42 @@ def notification_preferences(request):
             preferences.menu_notifications = data.get('menu_notifications', preferences.menu_notifications)
             preferences.system_notifications = data.get('system_notifications', preferences.system_notifications)
             preferences.save()
-            
             return JsonResponse({
                 'success': True,
                 'message': 'Notification preferences updated successfully'
             })
-            
         except Exception as e:
             return JsonResponse({
                 'error': f'Error updating preferences: {str(e)}'
             }, status=400)
-    
-    else:
-        # GET request - display preferences
-        try:
-            preferences = NotificationPreference.objects.get(user=user)
-        except NotificationPreference.DoesNotExist:
-            # Create default preferences
-            preferences = NotificationPreference.objects.create(
-                user=user,
-                email_enabled=True,
-                push_enabled=True,
-                order_notifications=True,
-                payment_notifications=True,
-                menu_notifications=True,
-                system_notifications=True
-            )
-        
-        context = {
-            'preferences': preferences
-        }
-        
-        return render(request, 'notifications/preferences.html', context)
+    context = {'preferences': preferences}
+    return render(request, 'notifications/preferences.html', context)
 
-
-def send_notification(user, title, message, notification_type='info', priority='normal', action_url=None, action_text=None):
-    """Send notification to a user"""
+def send_notification(user, title, message, notification_type='system', priority='normal', action_url=None, action_text=None, target_audience='all'):
     try:
-        # Create notification
         notification = Notification.objects.create(
-            user=user,
+            target_user=user,
             title=title,
             message=message,
             notification_type=notification_type,
             priority=priority,
-            action_url=action_url,
-            action_text=action_text
+            action_url=action_url or '',
+            action_text=action_text or '',
+            target_audience=target_audience,
+            created_at=timezone.now(),
+            is_read=False
         )
-        
-        # Create user notification
-        user_notification = UserNotification.objects.create(
+        preferences = NotificationPreference.objects.get_or_create(
             user=user,
-            notification=notification
-        )
-        
-        # Check user preferences
-        try:
-            preferences = NotificationPreference.objects.get(user=user)
-        except NotificationPreference.DoesNotExist:
-            # Create default preferences
-            preferences = NotificationPreference.objects.create(
-                user=user,
-                email_enabled=True,
-                push_enabled=True,
-                order_notifications=True,
-                payment_notifications=True,
-                menu_notifications=True,
-                system_notifications=True
-            )
-        
-        # Check if user wants this type of notification
+            defaults={
+                'email_enabled': True,
+                'push_enabled': True,
+                'order_notifications': True,
+                'payment_notifications': True,
+                'menu_notifications': True,
+                'system_notifications': True
+            }
+        )[0]
         should_send = True
         if notification_type == 'order' and not preferences.order_notifications:
             should_send = False
@@ -288,23 +134,93 @@ def send_notification(user, title, message, notification_type='info', priority='
             should_send = False
         elif notification_type == 'system' and not preferences.system_notifications:
             should_send = False
-        
-        if should_send:
-            # Send email notification if enabled
-            if preferences.email_enabled and user.email:
-                send_email_notification(user, notification)
-            
-            # TODO: Implement push notifications when mobile app is ready
-            if preferences.push_enabled:
-                # Placeholder for push notification
-                pass
-        
-        return user_notification
-        
+        if should_send and preferences.email_enabled and user.email:
+            try:
+                template = NotificationTemplate.objects.get(notification_type=notification_type, is_active=True)
+                subject = template.title
+                html_content = render_to_string('notifications/email_template.html', {
+                    'user': user,
+                    'notification': notification,
+                    'site_name': 'Enterprise Canteen'
+                })
+            except NotificationTemplate.DoesNotExist:
+                subject = f'Enterprise Canteen - {notification.title}'
+                html_content = render_to_string('notifications/email_template.html', {
+                    'user': user,
+                    'notification': notification,
+                    'site_name': 'Enterprise Canteen'
+                })
+            plain_message = strip_tags(html_content)
+            send_mail(
+                subject=subject,
+                message=plain_message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                html_message=html_content,
+                fail_silently=False
+            )
+            logger.info(f'Email notification sent to {user.email}')
+        return notification
+    except DatabaseError as e:
+        logger.error(f'Error creating notification for user {user.id}: {str(e)}', exc_info=True)
+        return None
     except Exception as e:
-        logger.error(f'Error sending notification to user {user.id}: {str(e)}')
+        logger.error(f'Unexpected error creating notification for user {user.id}: {str(e)}', exc_info=True)
         return None
 
+
+def send_bulk_notification(users, title, message, notification_type='system', target_audience='all', departments=None):
+    try:
+        notifications_created = 0
+        failed_users = []
+        action_url = '/notifications/'  # Default action URL
+        action_text = 'View Notification'  # Default action text
+        for user in users:
+            notification = send_notification(
+                user=user,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                priority='normal',
+                action_url=action_url,
+                action_text=action_text,
+                target_audience=target_audience
+            )
+            if notification:
+                notifications_created += 1
+            else:
+                failed_users.append(str(user.id))
+        logger.info(f'Bulk notification sent to {notifications_created} users, failed for {len(failed_users)} users')
+        return notifications_created, failed_users
+    except Exception as e:
+        logger.error(f'Error sending bulk notification: {str(e)}', exc_info=True)
+        return 0, [str(user.id) for user in users]
+
+
+class SystemNotificationManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
+    template_name = 'notifications.html'
+    def test_func(self):
+        return self.request.user.is_canteen_admin or self.request.user.is_superuser
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        notifications = Notification.objects.annotate(recipients_count=Count('target_user')).order_by('-created_at')
+        type_filter = self.request.GET.get('type', 'all')
+        if type_filter != 'all':
+            notifications = notifications.filter(notification_type=type_filter)
+        paginator = Paginator(notifications, 20)
+        page_number = self.request.GET.get('page')
+        page_obj = paginator.get_page(page_number)
+        context.update({
+            'notifications': page_obj,
+            'total_sent': Notification.objects.count(),
+            'sent_today': Notification.objects.filter(created_at__date=timezone.now().date()).count(),
+            'active_employees': User.objects.filter(is_active=True).count(),
+            'scheduled_notifications': 0,  # No scheduling support
+            'departments': Department.objects.all(),
+            'type_filter': type_filter,
+            'status_filter': 'all',  # No status field
+        })
+        return context
 
 def send_email_notification(user, notification):
     """Send email notification"""
@@ -349,229 +265,183 @@ def send_email_notification(user, notification):
         logger.error(f'Error sending email notification: {str(e)}')
 
 
-def send_bulk_notification(users, title, message, notification_type='info', priority='normal'):
-    """Send notification to multiple users"""
-    try:
-        notifications_created = 0
+# def send_bulk_notification(users, title, message, notification_type='info', priority='normal'):
+#     """Send notification to multiple users"""
+#     try:
+#         notifications_created = 0
         
-        for user in users:
-            user_notification = send_notification(
-                user=user,
-                title=title,
-                message=message,
-                notification_type=notification_type,
-                priority=priority
-            )
-            if user_notification:
-                notifications_created += 1
+#         for user in users:
+#             user_notification = send_notification(
+#                 user=user,
+#                 title=title,
+#                 message=message,
+#                 notification_type=notification_type,
+#                 priority=priority
+#             )
+#             if user_notification:
+#                 notifications_created += 1
         
-        logger.info(f'Bulk notification sent to {notifications_created} users')
-        return notifications_created
+#         logger.info(f'Bulk notification sent to {notifications_created} users')
+#         return notifications_created
         
-    except Exception as e:
-        logger.error(f'Error sending bulk notification: {str(e)}')
-        return 0
-
-
-class SystemNotificationManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
-    """System admin notification management"""
-    template_name = 'canteen_admin/notification.html'
-    
-    def test_func(self):
-        return self.request.user.is_canteen_admin() or self.request.user.is_superuser
-    
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        
-        # Notification statistics
-        total_notifications = Notification.objects.count()
-        unread_notifications = UserNotification.objects.filter(is_read=False).count()
-        today_notifications = Notification.objects.filter(
-            created_at__date=timezone.now().date()
-        ).count()
-        
-        context.update({
-            'total_notifications': total_notifications,
-            'unread_notifications': unread_notifications,
-            'today_notifications': today_notifications,
-        })
-        
-        # Recent notifications
-        recent_notifications = Notification.objects.select_related('user').order_by('-created_at')[:10]
-        context['recent_notifications'] = recent_notifications
-        
-        # Notification templates
-        templates = NotificationTemplate.objects.filter(is_active=True)
-        context['templates'] = templates
-        
-        return context
+#     except Exception as e:
+#         logger.error(f'Error sending bulk notification: {str(e)}')
+#         return 0
 
 
 @login_required
-@user_passes_test(lambda u: u.is_canteen_admin() or u.is_superuser)
+@user_passes_test(lambda u: u.is_canteen_admin or u.is_superuser)
 def system_notification_management(request):
-    # Filters
+    notifications = Notification.objects.annotate(
+        recipients_count=Count('target_user'),
+        status=Case(
+            When(is_read=True, then=Value('read')),
+            When(is_read=False, then=Value('sent')),
+            output_field=CharField()
+        )
+    ).order_by('-created_at')
     type_filter = request.GET.get('type', 'all')
-    status_filter = request.GET.get('status', 'all')
-    
-    notifications = Notification.objects.select_related('created_by').annotate(
-        recipients_count=Count('user_notifications')
-    )
-    
     if type_filter != 'all':
         notifications = notifications.filter(notification_type=type_filter)
-    if status_filter != 'all':
-        notifications = notifications.filter(status=status_filter)
-    
-    # Pagination
     paginator = Paginator(notifications, 20)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
-    
-    # Stats
-    today = timezone.now().date()
     context = {
         'notifications': page_obj,
-        'total_sent': Notification.objects.filter(status='sent').count(),
-        'sent_today': Notification.objects.filter(status='sent', created_at__date=today).count(),
+        'total_sent': Notification.objects.filter(is_read=False).count(),
+        'sent_today': Notification.objects.filter(created_at__date=timezone.now().date()).count(),
         'active_employees': User.objects.filter(is_active=True).count(),
-        'scheduled_notifications': Notification.objects.filter(status='scheduled').count(),
-        'departments': Department.objects.all(),  # Assuming Department model exists
-        # Filters
+        'scheduled_notifications': 0,  # No scheduling support
+        'departments': Department.objects.all(),
         'type_filter': type_filter,
-        'status_filter': status_filter,
+        'status_filter': 'all',  # Status derived from is_read
     }
-    
     return render(request, 'notifications.html', context)
+
 
 @login_required
 def send_system_notification(request):
-    """Create and send a system-wide notification"""
-    if not request.user.is_canteen_admin():
+    if not (request.user.is_canteen_admin or self.request.user.is_superuser):
         return JsonResponse({'error': 'Unauthorized'}, status=403)
-
     if request.method == 'POST':
         try:
-            # Handle JSON or form submission
             if request.content_type == "application/json":
                 data = json.loads(request.body)
             else:
                 data = request.POST
-
             title = data.get('title', '').strip()
             message = data.get('message', '').strip()
             notification_type = data.get('type', 'system')
-            priority = data.get('priority', 'normal')
             target_users = data.get('target_users', 'all')
-
+            department_ids = data.getlist('departments', [])
+            send_email = data.get('send_email', False)
+            send_option = data.get('send_option', 'send_now')
             if not title or not message:
                 return JsonResponse({'error': 'Title and message are required'}, status=400)
-
-            # Get target users
             if target_users == 'all':
                 users = User.objects.filter(is_active=True)
-            elif target_users == 'employees':
-                users = User.objects.filter(role='employee', is_active=True)
+            elif target_users == 'employees' and department_ids:
+                users = User.objects.filter(department__id__in=department_ids, is_active=True)
             elif target_users == 'admins':
                 users = User.objects.filter(role__in=['canteen_admin', 'system_admin'], is_active=True)
             else:
-                return JsonResponse({'error': 'Invalid target users'}, status=400)
-
-            # Save to DB
-            notification = Notification.objects.create(
-                title=title,
-                message=message,
-                notification_type=notification_type,
-                status="sent",  # mark as sent immediately
-                priority=priority,
-                created_at=timezone.now(),
-            )
-            notification.recipients.set(users)
-
-            # Send bulk notification (if you still want to push it)
+                return JsonResponse({'error': 'Invalid target users or departments'}, status=400)
             sent_count = send_bulk_notification(
                 users=users,
                 title=title,
                 message=message,
                 notification_type=notification_type,
-                priority=priority
             )
-
+            if send_email:
+                for user in users:
+                    send_notification(
+                        user=user,
+                        title=title,
+                        message=message,
+                        notification_type=notification_type
+                    )
             return JsonResponse({
                 'success': True,
                 'message': f'Notification sent to {sent_count} users',
                 'sent_count': sent_count,
                 'notification': {
-                    'id': notification.id,
-                    'title': notification.title,
-                    'message': notification.message,
-                    'type': notification.notification_type,
-                    'status': notification.status,
-                    'created_at': notification.created_at.strftime("%Y-%m-%d %H:%M"),
-                    'recipients': notification.recipients_count(),
+                    'title': title,
+                    'message': message,
+                    'type': notification_type,
+                    'created_at': timezone.now().strftime("%Y-%m-%d %H:%M"),
+                    'recipients': users.count(),
                 }
             })
-
         except Exception as e:
-            logger.error(f'Error sending system notification: {str(e)}')
-            return JsonResponse({'error': 'Failed to send notification'}, status=500)
-
+            logger.error(f'Error sending system notification: {str(e)}', exc_info=True)
+            return JsonResponse({'error': f'Failed to send notification: {str(e)}'}, status=500)
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @login_required
 def notification_templates_api(request):
-    """API endpoint for notification templates"""
-    if not request.user.is_system_admin():
+    if not (request.user.is_canteen_admin or request.user.is_superuser):
         return JsonResponse({'error': 'Unauthorized'}, status=403)
-    
-    templates = NotificationTemplate.objects.filter(is_active=True).order_by('name')
-    
-    templates_data = []
-    for template in templates:
-        templates_data.append({
+    templates = NotificationTemplate.objects.filter(is_active=True).order_by('title')
+    templates_data = [
+        {
             'id': str(template.id),
-            'name': template.name,
-            'subject': template.subject,
-            'content': template.content,
-            'variables': template.variables,
-            'notification_type': template.notification_type
-        })
-    
+            'title': template.title,
+            'message': template.message,
+            'notification_type': template.notification_type,
+            'created_at': template.created_at.strftime('%Y-%m-%d %H:%M')
+        } for template in templates
+    ]
     return JsonResponse({'templates': templates_data})
-
 
 @login_required
 def create_notification_template(request):
-    """Create a new notification template"""
-    if not request.user.is_system_admin():
+    if not (request.user.is_canteen_admin or request.user.is_superuser):
         return JsonResponse({'error': 'Unauthorized'}, status=403)
-    
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            
             template = NotificationTemplate.objects.create(
-                name=data['name'],
-                subject=data['subject'],
-                content=data['content'],
+                title=data['title'],
+                message=data['message'],
                 notification_type=data.get('notification_type', 'system'),
-                variables=data.get('variables', []),
-                created_by=request.user
+                created_at=timezone.now()
             )
-            
             return JsonResponse({
                 'success': True,
                 'message': 'Template created successfully',
                 'template_id': str(template.id)
             })
-            
         except Exception as e:
             return JsonResponse({
                 'error': f'Error creating template: {str(e)}'
             }, status=400)
-    
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
+@login_required
+def notifications_page(request):
+    if not (request.user.is_canteen_admin or request.user.is_superuser):
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+    notifications = Notification.objects.annotate(recipients_count=Count('recipients')).order_by('-created_at')
+    type_filter = request.GET.get('type', 'all')
+    status_filter = request.GET.get('status', 'all')
+    if type_filter != 'all':
+        notifications = notifications.filter(notification_type=type_filter)
+    if status_filter != 'all':
+        notifications = notifications.filter(status=status_filter)
+    paginator = Paginator(notifications, 20)
+    page_number = request.GET.get('page')
+    page_obj = paginator.get_page(page_number)
+    context = {
+        'notifications': page_obj,
+        'total_sent': Notification.objects.filter(status='sent').count(),
+        'sent_today': Notification.objects.filter(status='sent', created_at__date=timezone.now().date()).count(),
+        'active_employees': User.objects.filter(is_active=True).count(),
+        'scheduled_notifications': Notification.objects.filter(status='scheduled').count(),
+        'departments': Department.objects.all(),
+        'type_filter': type_filter,
+        'status_filter': status_filter,
+    }
+    return render(request, 'notifications.html', context)
 
 def send_order_notification(order, notification_type, additional_context=None):
     """Send order-related notifications"""
@@ -824,4 +694,3 @@ def notifications_page(request):
     }
 
     return render(request, "canteen_admin/notifications.html", context)
-

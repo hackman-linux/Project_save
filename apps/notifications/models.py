@@ -24,32 +24,35 @@ NOTIFICATION_TYPE_CHOICES = [
 # ------------------------------------
 # Models
 # ------------------------------------
-class Notification(models.Model):
-    TYPE_CHOICES = NOTIFICATION_TYPE_CHOICES
+from apps.orders.models import Order
 
-    target_user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="notifications"
-    )
+class Notification(models.Model):
+    target_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
     title = models.CharField(max_length=255)
     message = models.TextField()
-    notification_type = models.CharField(
-        max_length=20,
-        choices=TYPE_CHOICES
-    )
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPE_CHOICES)
+    action_url = models.URLField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # New fields
+    priority = models.CharField(max_length=10, default='normal')
+    action_text = models.CharField(max_length=50, blank=True, null=True)
+    read_at = models.DateTimeField(blank=True, null=True)
+    target_audience = models.CharField(max_length=50, blank=True, null=True)
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="notifications_created")
+
+
     def mark_as_read(self):
         self.is_read = True
-        self.save(update_fields=["is_read"])
+        self.read_at = timezone.now()
+        self.save(update_fields=["is_read", "read_at"])
 
     def __str__(self):
-        return f"{self.title} - {self.user}"
+        return f"{self.title} - {self.target_user}"
 
-    class Meta:
-        ordering = ["-created_at"]
 
 
 class NotificationTemplate(models.Model):

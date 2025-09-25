@@ -1,4 +1,6 @@
 import uuid
+import json
+from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from decimal import Decimal
 from apps.payments.models import WalletTransaction
@@ -10,6 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import JsonResponse, HttpResponseForbidden
 from django.db.models import Sum, Count
+from django.views.decorators.http import require_POST
 
 from .models import Order, OrderItem, OrderHistory, ReorderItem, OrderQueue
 from apps.menu.models import MenuItem
@@ -19,15 +22,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def is_canteen_admin(user):
+    return user.is_authenticated and (getattr(user, "role", None) == "canteen_admin" or user.is_superuser)
+
+
 class OrderCheckoutForm(forms.ModelForm):
     class Meta:
         model = Order
         fields = ["full_name", "email", "phone_number", "office_number", "special_instructions"]
 
-
-def is_canteen_admin(user):
-    """Adjust to your User model (role field)."""
-    return user.is_authenticated and (getattr(user, "role", None) == "canteen_admin" or user.is_superuser)
 
 
 @login_required
@@ -144,7 +147,7 @@ def order_detail(request, order_id):
         return HttpResponseForbidden("Not allowed")
 
     # If AJAX wanted JSON:
-    if request.is_ajax() or request.headers.get("x-requested-with") == "XMLHttpRequest":
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
         items = [{
             "name": it.menu_item.name,
             "quantity": it.quantity,
@@ -192,7 +195,7 @@ def quick_order(request, item_id=None):
         # Attach item
         order.items.create(
             order=order,
-            product=menu_item,
+            menu_item=menu_item,
             quantity=1,
             price=menu_item.price
         )
@@ -232,7 +235,7 @@ def add_to_cart(request, item_id):
     # Add item to order items
     order_item = order.items.create(
         order=order,
-        product=menu_item,
+        menu_item=menu_item,
         quantity=1,
         price=menu_item.price
     )
@@ -280,40 +283,39 @@ def process_topup(request):
 
     return render(request, "employee/process_topup.html")
 
-@login_required
-@user_passes_test(is_canteen_admin)
-def orders_management(request):
-    # ... (filters, queryset, counts from previous response)
-    # Ensure pending_orders_list uses employee
-    pending_orders_list = Order.objects.filter(status='pending').select_related('employee').prefetch_related('items').order_by('created_at')
-    
-    context = {
-        # ... (from previous)
-        'pending_orders_list': pending_orders_list,
-        'orders': page_obj,
-    }
-    return render(request, 'orders/orders_management.html', context)
-
 
 @login_required
 @user_passes_test(is_canteen_admin)
 def validate_order(request, order_id):
-    """Mark an order VALIDATED and notify the employee with a payment link."""
+    """
+    Canteen admin validates a pending order.
+    - Marks order as VALIDATED
+    - Logs history
+    - Sends in-app notification to employee with a payment link
+    """
     order = get_object_or_404(Order, id=order_id, status=Order.STATUS_PENDING)
+
+    # Update order status
     order.status = Order.STATUS_VALIDATED
     order.validated_at = timezone.now()
     order.save()
 
     # Log history
-    OrderHistory.objects.create(order=order, status_from=Order.STATUS_PENDING, status_to=Order.STATUS_VALIDATED, changed_by=request.user, notes="Validated by canteen admin")
+    OrderHistory.objects.create(
+        order=order,
+        status_from=Order.STATUS_PENDING,
+        status_to=Order.STATUS_VALIDATED,
+        changed_by=request.user,
+        notes="Validated by canteen admin"
+    )
 
-    # Build payment link to send to employee (points back to proceed_to_payment view)
+    # Build payment link
     payment_link = request.build_absolute_uri(reverse("orders:proceed_to_payment", args=[order.id]))
 
-    # Create notification for the employee
+    # Send in-app notification
     Notification.objects.create(
         title=f"Order {order.order_number} validated",
-        message=f"Your order has been validated. Continue to payment: {payment_link}",
+        message=f"Your order has been validated. Please proceed to payment: {payment_link}",
         notification_type="order_status",
         priority="normal",
         target_audience="specific_user",
@@ -324,7 +326,6 @@ def validate_order(request, order_id):
 
     messages.success(request, f"Order {order.order_number} validated and employee notified.")
     return redirect("orders:manage")
-
 
 @login_required
 @user_passes_test(is_canteen_admin)
@@ -892,6 +893,9 @@ Enterprise Canteen System
             recipient_list=admin_emails,
             fail_silently=True  # Don't break order creation if email fails
         )
+        if not getattr(settings, 'EMAIL_HOST', None):
+            logger.warning("EMAIL_HOST not set — skipping email notifications")
+
         
     except Exception as e:
         # Log error but don't break order creation
@@ -1001,38 +1005,23 @@ def is_canteen_admin(user):
     return user.is_authenticated and (getattr(user, "role", None) == "canteen_admin" or user.is_superuser)
 
 @user_passes_test(is_canteen_admin)
+@login_required
+@require_POST
 def confirm_order(request, order_id):
-    """Confirm a pending order."""
-    if request.method != 'POST':
-        return JsonResponse({'success': False, 'message': 'Method not allowed'}, status=405)
-
     order = get_object_or_404(Order, id=order_id)
-    if order.status != 'pending':
-        return JsonResponse({'success': False, 'message': 'Order is not in pending status'}, status=400)
+    order.status = Order.STATUS_VALIDATED
+    order.save()
 
-    try:
-        order.status = 'confirmed'
-        order.save()
-        OrderHistory.objects.create(
-            order=order,
-            status_from='pending',
-            status_to='confirmed',
-            changed_by=request.user,
-            notes='Order confirmed by admin'
-        )
-        Notification.objects.create(
-            title=f"Order #{order.order_number} Confirmed",
-            message=f"Your order #{order.order_number} has been confirmed and is being prepared.",
-            notification_type='order_status',
-            target_user=order.employee,
-            priority='normal',
-            order=order,
-            created_by=request.user,
-        )
-        return JsonResponse({'success': True, 'message': f'Order #{order.order_number} confirmed'})
-    except Exception as e:
-        logger.error(f"Error confirming order {order_id}: {str(e)}")
-        return JsonResponse({'success': False, 'message': f'Error: {str(e)}'}, status=500)
+    # ✅ Create notification with payment link
+    Notification.objects.create(
+        target_user=order.employee,
+        title=f"Order {order.order_number} Confirmed",
+        message="Your order has been confirmed. Please proceed to payment.",
+        notification_type="order_status",
+        action_url=reverse("orders:proceed_to_payment", args=[order.id])
+    )
+
+    return JsonResponse({"success": True})
 
 @user_passes_test(is_canteen_admin)
 def update_order_status(request, order_id):
@@ -1083,48 +1072,67 @@ def update_order_status(request, order_id):
 
 @user_passes_test(is_canteen_admin)
 def cancel_order(request, order_id):
-    """Cancel an order via AJAX."""
-    if request.method != 'POST':
-        return JsonResponse({'success': False, 'message': 'Method not allowed'}, status=405)
-
+    # 1️⃣ Get the order
     order = get_object_or_404(Order, id=order_id)
+
+    # 2️⃣ Check if order can be cancelled
+    if order.status == 'cancelled':
+        messages.warning(request, "Order is already cancelled.")
+        return redirect('orders:manage')
+
     try:
-        data = json.loads(request.body)
-        reason = data.get('reason')
-        notes = data.get('notes', '')
-        process_refund = data.get('process_refund', False)
-
-        if reason not in ['customer_request', 'payment_failed', 'item_not_available', 'kitchen_issue', 'other']:
-            return JsonResponse({'success': False, 'message': 'Invalid cancellation reason'}, status=400)
-
-        old_status = order.status
+        # 3️⃣ Cancel the order
         order.status = 'cancelled'
+        order.cancelled_at = timezone.now()
         order.save()
 
-        OrderHistory.objects.create(
-            order=order,
-            status_from=old_status,
-            status_to='cancelled',
-            changed_by=request.user,
-            notes=f"Cancelled: {reason}. {notes}"
-        )
-
+        # 4️⃣ Notify the employee
         Notification.objects.create(
-            title=f"Order #{order.order_number} Cancelled",
-            message=f"Your order #{order.order_number} was cancelled due to {reason}. {notes}",
-            notification_type='order_status',
-            target_user=order.employee,
-            priority='normal',
-            order=order,
-            created_by=request.user,
+            target_user=order.employee,  # adjust if field is named differently
+            title="Order Cancelled",
+            message=f"Order {order.id} has been cancelled by admin.",
+            notification_type="order_cancelled",
+            priority="high",
+            action_text="View Order",
+            action_url=f"/orders/{order.id}/detail/",
+            target_audience="employee",
         )
 
-        if process_refund and order.payment_status == 'paid':
-            # Implement refund logic here (e.g., via CamPay API if integrated)
-            # For now, just log it
-            logger.info(f"Refund requested for order {order.order_number}")
+        messages.success(request, f"Order {order.id} has been cancelled successfully.")
 
-        return JsonResponse({'success': True, 'message': f'Order #{order.order_number} cancelled'})
     except Exception as e:
-        logger.error(f"Error cancelling order {order_id}: {str(e)}")
-        return JsonResponse({'success': False, 'message': f'Error: {str(e)}'}, status=500)
+        # Catch and display errors
+        messages.error(request, f"Error cancelling order {order.id}: {str(e)}")
+
+    # 5️⃣ Redirect back to manage page
+    return redirect('orders:manage')
+
+# ADD THIS HELPER
+def send_payment_link_notification(order):
+    """Send a notification to the employee with payment link after admin validation"""
+    try:
+        user = order.customer  # Assuming your order model has a 'customer' FK
+        title = "Proceed to Payment"
+        message = f"Your order #{order.order_number} has been validated. Please proceed to payment."
+        action_url = f"/payments/proceed/{order.id}/"  # <- adjust this to your payment URL
+        action_text = "Pay Now"
+
+        return send_notification(
+            user=user,
+            title=title,
+            message=message,
+            notification_type="payment",
+            action_url=action_url,
+            action_text=action_text
+        )
+    except Exception as e:
+        logger.error(f"Error sending payment link notification: {str(e)}")
+        return None
+
+# views.py
+def order_counts(request):
+    counts = {
+        'pending': Order.objects.filter(status=Order.STATUS_PENDING).count(),
+        'confirmed': Order.objects.filter(status=Order.STATUS_VLIDATED).count(),
+    }
+    return JsonResponse(counts)

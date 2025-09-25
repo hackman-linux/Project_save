@@ -13,6 +13,20 @@ import uuid
 import requests
 import logging
 
+import requests
+import hashlib
+import hmac
+import json
+import uuid
+from decimal import Decimal
+from django.conf import settings
+from django.http import JsonResponse, HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 from .models import Payment, WalletTransaction, PaymentProvider, PaymentWebhook
 from apps.orders.models import Order
 from apps.notifications.models import Notification
@@ -885,3 +899,890 @@ def wallet_dashboard(request):
     }
     
     return render(request, 'payments/wallet_dashboard.html', context)
+
+# Add this to your existing payments/views.py
+
+import requests
+from django.conf import settings
+import hashlib
+import hmac
+from decimal import Decimal
+
+# CamPay Payment Integration
+def process_campay_payment(payment):
+    """Process CamPay Mobile Money payment"""
+    try:
+        # Mark payment as processing
+        payment.mark_as_processing()
+        
+        # CamPay configuration
+        campay_config = settings.CAMPAY_CONFIG
+        
+        # Generate signature for security
+        data_to_sign = f"{payment.payment_reference}{payment.amount}{campay_config['SECRET_KEY']}"
+        signature = hmac.new(
+            campay_config['SECRET_KEY'].encode('utf-8'),
+            data_to_sign.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': campay_config['API_KEY'],
+            'Authorization': f'Bearer {get_campay_access_token()}'
+        }
+        
+        payload = {
+            'amount': str(payment.amount),
+            'currency': 'XAF',
+            'from': payment.phone_number.replace('+', '').replace(' ', ''),
+            'description': payment.description or f'Payment for order #{payment.order.order_number if payment.order else "wallet top-up"}',
+            'external_reference': payment.payment_reference,
+            'redirect_url': f"{settings.BASE_URL}/payments/callback/campay/",
+            'webhook_url': f"{settings.BASE_URL}/payments/webhook/campay/",
+            'signature': signature
+        }
+        
+        response = requests.post(
+            f"{campay_config['BASE_URL']}/api/collect/",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            if response_data.get('status') == 'SUCCESS':
+                transaction_id = response_data.get('reference')
+                payment.transaction_id = transaction_id
+                payment.external_reference = response_data.get('external_reference', '')
+                payment.provider_response = response_data
+                payment.save()
+                
+                return {
+                    'success': True,
+                    'message': 'Payment request sent. Please approve on your phone.',
+                    'transaction_id': transaction_id,
+                    'requires_approval': True,
+                    'ussd_code': response_data.get('ussd_code', '')
+                }
+            else:
+                error_message = response_data.get('message', 'Payment initiation failed')
+                payment.mark_as_failed(error_message)
+                return {
+                    'success': False,
+                    'message': error_message
+                }
+        else:
+            error_message = f'CamPay API Error: {response.status_code} - {response.text}'
+            payment.mark_as_failed(error_message)
+            return {
+                'success': False,
+                'message': 'Failed to initiate CamPay payment'
+            }
+            
+    except Exception as e:
+        payment.mark_as_failed(str(e))
+        return {
+            'success': False,
+            'message': 'CamPay payment processing failed'
+        }
+
+
+def get_campay_access_token():
+    """Get CamPay access token"""
+    try:
+        campay_config = settings.CAMPAY_CONFIG
+        
+        payload = {
+            'username': campay_config['USERNAME'],
+            'password': campay_config['PASSWORD']
+        }
+        
+        response = requests.post(
+            f"{campay_config['BASE_URL']}/api/token/",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            return response.json().get('token')
+        else:
+            raise Exception('Failed to get CamPay access token')
+            
+    except Exception as e:
+        logger.error(f'CamPay token error: {str(e)}')
+        raise
+
+
+def verify_campay_payment(payment):
+    """Verify CamPay payment status"""
+    try:
+        campay_config = settings.CAMPAY_CONFIG
+        
+        headers = {
+            'X-API-KEY': campay_config['API_KEY'],
+            'Authorization': f'Bearer {get_campay_access_token()}'
+        }
+        
+        response = requests.get(
+            f"{campay_config['BASE_URL']}/api/transaction/{payment.transaction_id}/",
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            status = data.get('status', '').upper()
+            
+            if status in ['SUCCESSFUL', 'COMPLETED']:
+                # Update payment with provider response
+                payment.provider_response = data
+                payment.save()
+                
+                # Process successful payment
+                if payment.transaction_type == 'wallet_topup':
+                    complete_wallet_topup(payment)
+                elif payment.order:
+                    # Update order status to paid
+                    payment.order.status = payment.order.STATUS_PAID
+                    payment.order.paid_at = timezone.now()
+                    payment.order.payment_method = payment.payment_method
+                    payment.order.save()
+                
+                payment.mark_as_completed(payment.transaction_id)
+                
+                # Send success notification
+                send_payment_success_notification(payment)
+                
+                return {'status': 'completed', 'message': 'Payment completed successfully'}
+                
+            elif status in ['FAILED', 'CANCELLED']:
+                failure_reason = data.get('reason', 'Payment failed by provider')
+                payment.mark_as_failed(failure_reason)
+                
+                # Send failure notification
+                send_payment_failure_notification(payment, failure_reason)
+                
+                return {'status': 'failed', 'message': failure_reason}
+            else:
+                return {'status': 'processing', 'message': 'Payment is being processed'}
+        else:
+            return {'status': 'processing', 'message': 'Unable to verify payment status'}
+            
+    except Exception as e:
+        logger.error(f'CamPay verification error: {str(e)}')
+        return {'status': 'processing', 'message': 'Unable to verify payment status'}
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def campay_webhook(request):
+    """Handle CamPay webhooks"""
+    try:
+        data = json.loads(request.body)
+        
+        # Verify webhook signature for security
+        signature = request.headers.get('X-CamPay-Signature', '')
+        expected_signature = hmac.new(
+            settings.CAMPAY_CONFIG['SECRET_KEY'].encode('utf-8'),
+            request.body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        if signature != expected_signature:
+            logger.warning('Invalid CamPay webhook signature')
+            return HttpResponse('Invalid signature', status=400)
+        
+        # Store webhook data
+        PaymentWebhook.objects.create(
+            provider='campay',
+            webhook_data=data
+        )
+        
+        # Process webhook
+        external_reference = data.get('external_reference')
+        status = data.get('status', '').upper()
+        
+        if external_reference:
+            try:
+                payment = Payment.objects.get(payment_reference=external_reference)
+                payment.provider_response = data
+                payment.save()
+                
+                if status in ['SUCCESSFUL', 'COMPLETED']:
+                    if payment.transaction_type == 'wallet_topup':
+                        complete_wallet_topup(payment)
+                    elif payment.order:
+                        # Update order status
+                        payment.order.status = payment.order.STATUS_PAID
+                        payment.order.paid_at = timezone.now()
+                        payment.order.payment_method = payment.payment_method
+                        payment.order.save()
+                        
+                        # Send order paid notification
+                        send_order_paid_notification(payment.order)
+                    
+                    payment.mark_as_completed(data.get('reference'))
+                    send_payment_success_notification(payment)
+                    
+                elif status in ['FAILED', 'CANCELLED']:
+                    failure_reason = data.get('reason', 'Payment failed by provider')
+                    payment.mark_as_failed(failure_reason)
+                    send_payment_failure_notification(payment, failure_reason)
+                    
+            except Payment.DoesNotExist:
+                logger.warning(f'Payment not found for CamPay webhook: {external_reference}')
+        
+        return HttpResponse('OK', status=200)
+        
+    except Exception as e:
+        logger.error(f'CamPay webhook error: {str(e)}')
+        return HttpResponse('Error', status=500)
+
+
+# Update your process_payment function to include CamPay
+def process_payment_updated(request):
+    """Updated process payment function with CamPay integration"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            order_id = data.get('order_id')
+            payment_method = data.get('payment_method')
+            phone_number = data.get('phone_number', '')
+            
+            # Get order
+            order = get_object_or_404(Order, id=order_id, employee=request.user)
+            
+            if order.status != Order.STATUS_VALIDATED:
+                return JsonResponse({'error': 'Order is not validated yet'}, status=400)
+            
+            # Check if payment already exists
+            if order.payments.filter(status__in=['pending', 'processing', 'completed']).exists():
+                return JsonResponse({'error': 'Payment already processed'}, status=400)
+            
+            with transaction.atomic():
+                # Generate unique payment reference
+                payment_reference = f"PAY_{uuid.uuid4().hex[:12].upper()}"
+                
+                # Create payment record
+                payment = Payment.objects.create(
+                    payment_reference=payment_reference,
+                    user=request.user,
+                    order=order,
+                    payment_method=payment_method,
+                    transaction_type='order_payment',
+                    amount=order.total_amount,
+                    phone_number=phone_number,
+                    description=f'Payment for order #{order.order_number}'
+                )
+                
+                # Process payment based on method
+                if payment_method == 'wallet':
+                    result = process_wallet_payment(payment)
+                elif payment_method == 'campay':
+                    result = process_campay_payment(payment)
+                elif payment_method == 'mtn_momo':
+                    result = process_mtn_payment(payment)
+                elif payment_method == 'orange_money':
+                    result = process_orange_payment(payment)
+                else:
+                    return JsonResponse({'error': 'Invalid payment method'}, status=400)
+                
+                if result['success']:
+                    return JsonResponse({
+                        'success': True,
+                        'message': result['message'],
+                        'payment_id': str(payment.id),
+                        'transaction_id': result.get('transaction_id', ''),
+                        'redirect_url': result.get('redirect_url', ''),
+                        'requires_approval': result.get('requires_approval', False),
+                        'ussd_code': result.get('ussd_code', '')
+                    })
+                else:
+                    return JsonResponse({
+                        'error': result['message']
+                    }, status=400)
+                    
+        except Exception as e:
+            logger.error(f'Payment processing error: {str(e)}')
+            return JsonResponse({'error': 'Payment processing failed'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+# Notification functions
+def send_payment_success_notification(payment):
+    """Send payment success notification"""
+    try:
+        from apps.notifications.models import Notification
+        
+        if payment.transaction_type == 'wallet_topup':
+            title = 'Wallet Top-up Successful'
+            message = f'Your wallet has been topped up with {payment.amount} XAF successfully.'
+        else:
+            title = 'Payment Successful'
+            message = f'Payment of {payment.amount} XAF for order #{payment.order.order_number} completed successfully.'
+        
+        Notification.objects.create(
+            target_user=payment.user,
+            title=title,
+            message=message,
+            notification_type='payment_success',
+            priority='normal',
+            order=payment.order,
+            action_url=f'/orders/{payment.order.id}/detail/' if payment.order else '/payments/history/',
+            action_text='View Details',
+            created_by=None
+        )
+        
+        # Send email notification
+        send_payment_email_notification(payment, 'success')
+        
+    except Exception as e:
+        logger.error(f'Error sending payment success notification: {str(e)}')
+
+
+def send_payment_failure_notification(payment, reason):
+    """Send payment failure notification"""
+    try:
+        from apps.notifications.models import Notification
+        
+        if payment.transaction_type == 'wallet_topup':
+            title = 'Wallet Top-up Failed'
+            message = f'Your wallet top-up of {payment.amount} XAF failed. Reason: {reason}'
+        else:
+            title = 'Payment Failed'
+            message = f'Payment of {payment.amount} XAF for order #{payment.order.order_number} failed. Reason: {reason}'
+        
+        Notification.objects.create(
+            target_user=payment.user,
+            title=title,
+            message=message,
+            notification_type='payment_failed',
+            priority='high',
+            order=payment.order,
+            action_url=f'/orders/{payment.order.id}/payment/' if payment.order else '/payments/topup/',
+            action_text='Try Again',
+            created_by=None
+        )
+        
+        # Send email notification
+        send_payment_email_notification(payment, 'failure', reason)
+        
+    except Exception as e:
+        logger.error(f'Error sending payment failure notification: {str(e)}')
+
+
+def send_order_paid_notification(order):
+    """Send notification when order is paid"""
+    try:
+        from apps.notifications.models import Notification
+        
+        # Notify customer
+        Notification.objects.create(
+            target_user=order.employee,
+            title=f'Order #{order.order_number} Payment Confirmed',
+            message=f'Payment for your order #{order.order_number} has been confirmed. Your order is now being prepared.',
+            notification_type='order_status',
+            priority='normal',
+            order=order,
+            action_url=f'/orders/{order.id}/detail/',
+            action_text='View Order',
+            created_by=None
+        )
+        
+        # Notify canteen admins
+        Notification.objects.create(
+            target_audience='canteen_admins',
+            title=f'Order #{order.order_number} Paid',
+            message=f'Order #{order.order_number} by {order.employee.get_full_name() or order.employee.username} has been paid and is ready for preparation.',
+            notification_type='order_status',
+            priority='normal',
+            order=order,
+            action_url=f'/admin/orders/{order.id}/details/',
+            action_text='View Order',
+            created_by=None
+        )
+        
+    except Exception as e:
+        logger.error(f'Error sending order paid notification: {str(e)}')
+
+
+def send_payment_email_notification(payment, status, reason=None):
+    """Send payment email notification"""
+    try:
+        from django.core.mail import send_mail
+        from django.template.loader import render_to_string
+        from django.conf import settings
+        
+        if not hasattr(settings, 'EMAIL_HOST') or not settings.DEFAULT_FROM_EMAIL:
+            return
+        
+        if status == 'success':
+            subject = f'Payment Confirmation - {payment.amount} XAF'
+            if payment.transaction_type == 'wallet_topup':
+                template = 'payments/emails/topup_success.html'
+            else:
+                template = 'payments/emails/payment_success.html'
+        else:
+            subject = f'Payment Failed - {payment.amount} XAF'
+            if payment.transaction_type == 'wallet_topup':
+                template = 'payments/emails/topup_failed.html'
+            else:
+                template = 'payments/emails/payment_failed.html'
+        
+        context = {
+            'user': payment.user,
+            'payment': payment,
+            'order': payment.order,
+            'reason': reason
+        }
+        
+        html_message = render_to_string(template, context)
+        
+        send_mail(
+            subject=subject,
+            message='',  # Plain text version can be added
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[payment.user.email],
+            html_message=html_message,
+            fail_silently=True
+        )
+        
+    except Exception as e:
+        logger.error(f'Error sending payment email: {str(e)}')
+
+# Add these functions to your payments/views.py
+
+
+def process_campay_payment(payment):
+    """Process CamPay payment (handles MTN, Orange, etc. automatically)"""
+    try:
+        payment.mark_as_processing()
+        
+        campay_config = settings.CAMPAY_CONFIG
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'X-API-KEY': campay_config['API_KEY']
+        }
+        
+        # CamPay collect request payload
+        payload = {
+            'amount': int(payment.amount),  # CamPay expects integer amount
+            'currency': 'XAF',
+            'from': payment.phone_number.replace('+', '').replace(' ', ''),
+            'description': payment.description or f'Order #{payment.order.order_number}',
+            'external_reference': payment.payment_reference,
+        }
+        
+        response = requests.post(
+            f"{campay_config['BASE_URL']}/collect/",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            
+            if response_data.get('status') == 'PENDING':
+                # Payment initiated successfully
+                payment.transaction_id = response_data.get('reference')
+                payment.external_reference = response_data.get('external_reference')
+                payment.provider_response = response_data
+                payment.save()
+                
+                return {
+                    'success': True,
+                    'message': 'Payment request sent. Please check your phone for approval.',
+                    'transaction_id': payment.transaction_id,
+                    'requires_approval': True,
+                    'ussd_code': response_data.get('ussd_code', '')
+                }
+            else:
+                error_message = response_data.get('message', 'Payment initiation failed')
+                payment.mark_as_failed(error_message)
+                return {
+                    'success': False,
+                    'message': error_message
+                }
+        else:
+            error_message = f'CamPay API Error: {response.status_code}'
+            try:
+                error_data = response.json()
+                error_message += f" - {error_data.get('message', response.text)}"
+            except:
+                error_message += f" - {response.text}"
+            
+            payment.mark_as_failed(error_message)
+            return {
+                'success': False,
+                'message': 'Failed to initiate payment. Please try again.'
+            }
+            
+    except Exception as e:
+        logger.error(f'CamPay payment error: {str(e)}')
+        payment.mark_as_failed(str(e))
+        return {
+            'success': False,
+            'message': 'Payment processing failed. Please try again.'
+        }
+
+
+def verify_campay_payment(payment):
+    """Check CamPay payment status"""
+    try:
+        campay_config = settings.CAMPAY_CONFIG
+        
+        headers = {
+            'X-API-KEY': campay_config['API_KEY']
+        }
+        
+        response = requests.get(
+            f"{campay_config['BASE_URL']}/transaction/{payment.transaction_id}/",
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            status = data.get('status', '').upper()
+            
+            if status == 'SUCCESSFUL':
+                # Payment completed successfully
+                payment.provider_response = data
+                payment.save()
+                
+                # Handle successful payment
+                if payment.transaction_type == 'wallet_topup':
+                    complete_wallet_topup(payment)
+                elif payment.order:
+                    # Update order status
+                    payment.order.status = payment.order.STATUS_PAID
+                    payment.order.paid_at = timezone.now()
+                    payment.order.payment_method = payment.payment_method
+                    payment.order.save()
+                    
+                    # Send order paid notification
+                    send_order_paid_notification(payment.order)
+                
+                payment.mark_as_completed()
+                send_payment_success_notification(payment)
+                
+                return {'status': 'completed', 'message': 'Payment completed successfully'}
+                
+            elif status in ['FAILED', 'CANCELLED']:
+                failure_reason = data.get('reason', 'Payment failed')
+                payment.mark_as_failed(failure_reason)
+                send_payment_failure_notification(payment, failure_reason)
+                
+                return {'status': 'failed', 'message': failure_reason}
+            else:
+                return {'status': 'processing', 'message': 'Payment is being processed'}
+        else:
+            return {'status': 'processing', 'message': 'Unable to verify payment status'}
+            
+    except Exception as e:
+        logger.error(f'CamPay verification error: {str(e)}')
+        return {'status': 'processing', 'message': 'Unable to verify payment status'}
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def campay_webhook(request):
+    """Handle CamPay webhook notifications"""
+    try:
+        data = json.loads(request.body)
+        
+        # Store webhook for audit
+        from .models import PaymentWebhook
+        PaymentWebhook.objects.create(
+            provider='campay',
+            webhook_data=data,
+            processed=False
+        )
+        
+        # Process the webhook
+        external_reference = data.get('external_reference')
+        status = data.get('status', '').upper()
+        
+        if external_reference:
+            try:
+                from .models import Payment
+                payment = Payment.objects.get(payment_reference=external_reference)
+                
+                # Update payment with response data
+                payment.provider_response = data
+                payment.save()
+                
+                if status == 'SUCCESSFUL':
+                    # Handle successful payment
+                    if payment.transaction_type == 'wallet_topup':
+                        complete_wallet_topup(payment)
+                    elif payment.order:
+                        # Update order status
+                        payment.order.status = payment.order.STATUS_PAID
+                        payment.order.paid_at = timezone.now()
+                        payment.order.payment_method = payment.payment_method
+                        payment.order.save()
+                        
+                        # Send notifications
+                        send_order_paid_notification(payment.order)
+                    
+                    payment.mark_as_completed(data.get('reference'))
+                    send_payment_success_notification(payment)
+                    
+                elif status in ['FAILED', 'CANCELLED']:
+                    failure_reason = data.get('reason', 'Payment failed by provider')
+                    payment.mark_as_failed(failure_reason)
+                    send_payment_failure_notification(payment, failure_reason)
+                
+                # Mark webhook as processed
+                webhook = PaymentWebhook.objects.filter(
+                    provider='campay',
+                    webhook_data=data
+                ).first()
+                if webhook:
+                    webhook.processed = True
+                    webhook.processed_at = timezone.now()
+                    webhook.save()
+                    
+            except Payment.DoesNotExist:
+                logger.warning(f'Payment not found for CamPay webhook: {external_reference}')
+        
+        return HttpResponse('OK', status=200)
+        
+    except Exception as e:
+        logger.error(f'CamPay webhook error: {str(e)}')
+        return HttpResponse('Error', status=500)
+
+
+# Enhanced process_payment function with CamPay
+@login_required
+def process_payment(request):
+    """Process payment with CamPay integration"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            order_id = data.get('order_id')
+            payment_method = data.get('payment_method')
+            phone_number = data.get('phone_number', '')
+            
+            # Get and validate order
+            from apps.orders.models import Order
+            order = get_object_or_404(Order, id=order_id, employee=request.user)
+            
+            if order.status != Order.STATUS_VALIDATED:
+                return JsonResponse({'error': 'Order is not validated yet'}, status=400)
+            
+            # Check if payment already exists
+            if order.payments.filter(status__in=['pending', 'processing', 'completed']).exists():
+                return JsonResponse({'error': 'Payment already processed'}, status=400)
+            
+            # Validate phone number for mobile money
+            if payment_method == 'campay' and not phone_number:
+                return JsonResponse({'error': 'Phone number is required for mobile money payment'}, status=400)
+            
+            with transaction.atomic():
+                # Create payment record
+                from .models import Payment
+                payment = Payment.objects.create(
+                    payment_reference=f"PAY_{uuid.uuid4().hex[:12].upper()}",
+                    user=request.user,
+                    order=order,
+                    payment_method=payment_method,
+                    transaction_type='order_payment',
+                    amount=order.total_amount,
+                    phone_number=phone_number,
+                    description=f'Payment for order #{order.order_number}'
+                )
+                
+                # Process payment based on method
+                if payment_method == 'wallet':
+                    result = process_wallet_payment(payment)
+                elif payment_method == 'campay':
+                    result = process_campay_payment(payment)
+                else:
+                    return JsonResponse({'error': 'Invalid payment method'}, status=400)
+                
+                if result['success']:
+                    return JsonResponse({
+                        'success': True,
+                        'message': result['message'],
+                        'payment_id': str(payment.id),
+                        'transaction_id': result.get('transaction_id', ''),
+                        'requires_approval': result.get('requires_approval', False),
+                        'ussd_code': result.get('ussd_code', '')
+                    })
+                else:
+                    return JsonResponse({'error': result['message']}, status=400)
+                    
+        except Exception as e:
+            logger.error(f'Payment processing error: {str(e)}')
+            return JsonResponse({'error': 'Payment processing failed'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+# Enhanced topup processing with CamPay
+@login_required
+def process_topup(request):
+    """Process wallet top-up with CamPay"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            amount = Decimal(data.get('amount', '0'))
+            payment_method = data.get('payment_method', 'campay')
+            phone_number = data.get('phone_number', '')
+            
+            # Validate amount
+            if amount <= 0:
+                return JsonResponse({'error': 'Invalid amount'}, status=400)
+            
+            if amount < 100:
+                return JsonResponse({'error': 'Minimum top-up amount is 100 XAF'}, status=400)
+                
+            if amount > 1000000:
+                return JsonResponse({'error': 'Maximum top-up amount is 1,000,000 XAF'}, status=400)
+            
+            # Validate phone number for CamPay
+            if payment_method == 'campay' and not phone_number:
+                return JsonResponse({'error': 'Phone number is required'}, status=400)
+            
+            with transaction.atomic():
+                # Create payment record for top-up
+                from .models import Payment
+                payment = Payment.objects.create(
+                    payment_reference=f"TOP_{uuid.uuid4().hex[:12].upper()}",
+                    user=request.user,
+                    payment_method=payment_method,
+                    transaction_type='wallet_topup',
+                    amount=amount,
+                    phone_number=phone_number,
+                    description=f'Wallet top-up for {request.user.get_full_name()}'
+                )
+                
+                # Process payment
+                if payment_method == 'campay':
+                    result = process_campay_payment(payment)
+                else:
+                    return JsonResponse({'error': 'Payment method not supported'}, status=400)
+                
+                if result['success']:
+                    return JsonResponse({
+                        'success': True,
+                        'message': result['message'],
+                        'payment_id': str(payment.id),
+                        'transaction_id': result.get('transaction_id', ''),
+                        'requires_approval': result.get('requires_approval', False)
+                    })
+                else:
+                    return JsonResponse({'error': result['message']}, status=400)
+                    
+        except Exception as e:
+            logger.error(f'Top-up processing error: {str(e)}')
+            return JsonResponse({'error': 'Top-up processing failed'}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+# Notification helper functions (already defined in previous artifact)
+def send_payment_success_notification(payment):
+    """Send payment success notification"""
+    try:
+        from apps.notifications.models import Notification
+        
+        if payment.transaction_type == 'wallet_topup':
+            title = 'Wallet Top-up Successful'
+            message = f'Your wallet has been topped up with {payment.amount} XAF successfully.'
+            action_url = '/payments/history/'
+            action_text = 'View History'
+        else:
+            title = 'Payment Successful'
+            message = f'Payment of {payment.amount} XAF for order #{payment.order.order_number} completed successfully.'
+            action_url = f'/orders/{payment.order.id}/detail/'
+            action_text = 'View Order'
+        
+        Notification.objects.create(
+            target_user=payment.user,
+            title=title,
+            message=message,
+            notification_type='payment_success',
+            priority='normal',
+            order=payment.order,
+            action_url=action_url,
+            action_text=action_text,
+            created_by=None
+        )
+        
+    except Exception as e:
+        logger.error(f'Error sending payment success notification: {str(e)}')
+
+
+def send_payment_failure_notification(payment, reason):
+    """Send payment failure notification"""
+    try:
+        from apps.notifications.models import Notification
+        
+        if payment.transaction_type == 'wallet_topup':
+            title = 'Wallet Top-up Failed'
+            message = f'Your wallet top-up of {payment.amount} XAF failed. Reason: {reason}'
+            action_url = '/payments/topup/'
+            action_text = 'Try Again'
+        else:
+            title = 'Payment Failed'
+            message = f'Payment of {payment.amount} XAF for order #{payment.order.order_number} failed. Reason: {reason}'
+            action_url = f'/orders/{payment.order.id}/payment/'
+            action_text = 'Try Again'
+        
+        Notification.objects.create(
+            target_user=payment.user,
+            title=title,
+            message=message,
+            notification_type='payment_failed',
+            priority='high',
+            order=payment.order,
+            action_url=action_url,
+            action_text=action_text,
+            created_by=None
+        )
+        
+    except Exception as e:
+        logger.error(f'Error sending payment failure notification: {str(e)}')
+
+
+def send_order_paid_notification(order):
+    """Send notification when order is paid"""
+    try:
+        from apps.notifications.models import Notification
+        
+        # Notify customer
+        Notification.objects.create(
+            target_user=order.employee,
+            title=f'Order #{order.order_number} Payment Confirmed',
+            message=f'Payment confirmed! Your order is now being prepared by our kitchen team.',
+            notification_type='order_status',
+            priority='normal',
+            order=order,
+            action_url=f'/orders/{order.id}/detail/',
+            action_text='Track Order',
+            created_by=None
+        )
+        
+        # Notify canteen admins
+        Notification.objects.create(
+            target_audience='canteen_admins',
+            title=f'Order #{order.order_number} Paid',
+            message=f'Order #{order.order_number} by {order.employee.get_full_name() or order.employee.username} has been paid and is ready for preparation.',
+            notification_type='order_status',
+            priority='normal',
+            order=order,
+            action_url=f'/admin/orders/{order.id}/details/',
+            action_text='View Order',
+            created_by=None
+        )
+        
+    except Exception as e:
+        logger.error(f'Error sending order paid notification: {str(e)}')

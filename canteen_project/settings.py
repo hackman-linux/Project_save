@@ -94,7 +94,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "canteen_project.wsgi.application"
-ASGI_APPLICATION = "canteen_project.asgi.application"
+ASGI_APPLICATION = 'canteen_project.asgi.application'
 
 # --------------------
 # Database
@@ -201,30 +201,35 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@canteenoapi.c
 # Logging
 # --------------------
 LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "verbose": {
-            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
-            "style": "{",
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': 'payments.log',
+        },
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
         },
     },
-    "handlers": {
-        "file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": LOG_DIR / "django.log",
-            "formatter": "verbose",
+    'loggers': {
+        'payments': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
         },
-        "console": {
-            "level": "DEBUG",
-            "class": "logging.StreamHandler",
-            "formatter": "verbose",
+        'orders': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
         },
-    },
-    "loggers": {
-        "django": {"handlers": ["file", "console"], "level": "INFO", "propagate": True},
-        "canteen": {"handlers": ["file", "console"], "level": "DEBUG", "propagate": True},
+        'notifications': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
     },
 }
 
@@ -278,21 +283,20 @@ CANTEEN_SETTINGS = {
     ],
 }
 
+BASE_URL = os.environ.get('BASE_URL', 'http://localhost:8000')
+
 # --------------------
 # Mobile Money Configs
 # --------------------
-MTN_MOMO_CONFIG = {
-    "API_URL": config("MTN_API_URL", default="https://sandbox.momodeveloper.mtn.com"),
-    "API_KEY": config("MTN_API_KEY", default=""),
-    "API_SECRET": config("MTN_API_SECRET", default=""),
-    "SUBSCRIPTION_KEY": config("MTN_SUBSCRIPTION_KEY", default=""),
-}
-
-ORANGE_MONEY_CONFIG = {
-    "API_URL": config("ORANGE_API_URL", default="https://api.orange.com/orange-money-webpay/dev/v1"),
-    "CLIENT_ID": config("ORANGE_CLIENT_ID", default=""),
-    "CLIENT_SECRET": config("ORANGE_CLIENT_SECRET", default=""),
-    "MERCHANT_KEY": config("ORANGE_MERCHANT_KEY", default=""),
+# CamPay Configuration - Primary payment processor (handles MTN, Orange, etc.)
+CAMPAY_CONFIG = {
+    'API_KEY': config('CAMPAY_API_KEY', default=''),
+    'SECRET_KEY': config('CAMPAY_SECRET_KEY', default=''),
+    'USERNAME': config('CAMPAY_USERNAME', default=''),
+    'PASSWORD': config('CAMPAY_PASSWORD', default=''),
+    'BASE_URL': config('CAMPAY_BASE_URL', default='https://demo.campay.net'),  # Use https://api.campay.net for production
+    'WEBHOOK_URL': config('CAMPAY_WEBHOOK_URL', default=''),
+    'ENVIRONMENT': config('CAMPAY_ENVIRONMENT', default='sandbox'),  # sandbox or live
 }
 
 # --------------------

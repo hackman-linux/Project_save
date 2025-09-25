@@ -137,6 +137,20 @@
             </div>
         </div>
     </div>
+    <div class="col-md-6 text-end">
+    <div class="btn-group">
+        <button class="btn btn-outline-success btn-sm" onclick="bulkAction('activate')">
+            <i class="bi bi-check-circle me-1"></i>Activate Selected
+        </button>
+        <button class="btn btn-outline-warning btn-sm" onclick="bulkAction('deactivate')">
+            <i class="bi bi-x-circle me-1"></i>Deactivate Selected
+        </button>
+        <button class="btn btn-outline-danger btn-sm" onclick="bulkAction('delete')">
+            <i class="bi bi-trash me-1"></i>Delete Selected
+        </button>
+    </div>
+</div>
+
     <div class="card-body">
         <!-- Users Table -->
         <div class="table-responsive">
@@ -836,5 +850,129 @@ function generatePasswordReset() {
 document.addEventListener('DOMContentLoaded', function() {
     new UserManager();
 });
+function viewUser(userId) {
+    const modal = new bootstrap.Modal(document.getElementById('userDetailsModal'));
+    modal.show();
+
+    fetch(`/system_admin/user/${userId}/details/`)
+        .then(res => res.text())
+        .then(html => {
+            document.getElementById('userDetailsContent').innerHTML = html;
+        })
+        .catch(() => {
+            document.getElementById('userDetailsContent').innerHTML =
+                '<div class="alert alert-danger">Failed to load user details.</div>';
+        });
+}
+
+function editUser(userId) {
+    const modal = new bootstrap.Modal(document.getElementById('editUserModal'));
+    modal.show();
+
+    fetch(`/system_admin/user/${userId}/edit/`)
+        .then(res => res.text())
+        .then(html => {
+            document.getElementById('editUserContent').innerHTML = html;
+
+            // Attach submit handler dynamically
+            const form = document.querySelector('#editUserContent form');
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                const formData = new FormData(form);
+
+                fetch(`/system_admin/user/${userId}/edit/`, {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        modal.hide();
+                        refreshUserList(); // reloads the table
+                    } else {
+                        alert('Error updating user');
+                    }
+                });
+            });
+        });
+}
+
+function resetPassword(userId) {
+    const modal = new bootstrap.Modal(document.getElementById('resetPasswordModal'));
+    modal.show();
+
+    const form = document.getElementById('resetPasswordForm');
+    form.onsubmit = function(e) {
+        e.preventDefault();
+        const password = document.getElementById('new_password_reset').value;
+        const forceChange = document.getElementById('force_password_change').checked;
+
+        fetch(`/system_admin/user/${userId}/reset-password/`, {
+            method: 'POST',
+            body: JSON.stringify({ password, force_change: forceChange }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                modal.hide();
+                alert('Password reset successfully!');
+            } else {
+                alert('Error resetting password');
+            }
+        });
+    };
+}
+
+function toggleUserStatus(userId, currentlyActive) {
+    const action = currentlyActive ? 'deactivate' : 'activate';
+    if (!confirm(`Are you sure you want to ${action} this user?`)) return;
+
+    fetch(`/system_admin/user/${userId}/toggle-status/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value }
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            refreshUserList();
+        } else {
+            alert('Error updating user status');
+        }
+    });
+}
+
+function bulkAction(action) {
+    const selected = Array.from(document.querySelectorAll('.user-checkbox:checked'))
+                          .map(cb => cb.value);
+    if (selected.length === 0) {
+        alert('Please select at least one user.');
+        return;
+    }
+
+    if (!confirm(`Are you sure you want to ${action} ${selected.length} users?`)) return;
+
+    fetch(`/system_admin/users/bulk-${action}/`, {
+        method: 'POST',
+        body: JSON.stringify({ user_ids: selected }),
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        }
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            refreshUserList();
+        } else {
+            alert('Bulk action failed');
+        }
+    });
+}
+
 </script>
 {% endblock %}

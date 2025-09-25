@@ -14,6 +14,7 @@ urlpatterns = [
     
     # Authentication URLs
     path('auth/', include('apps.authentication.urls')),
+    path('favicon.ico', RedirectView.as_view(url='/static/favicon.ico')),
     
     # Main dashboard redirect
     path('', RedirectView.as_view(url='/dashboard/', permanent=False)),
