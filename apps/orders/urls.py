@@ -30,7 +30,7 @@ urlpatterns = [
     
     # Canteen Admin Views
     path('manage/', views.orders_management, name='manage'),
-    path('<uuid:order_id>/validate/', views.validate_order, name='validate_order'),
+    # path('<uuid:order_id>/validate/', views.validate_order, name='validate_order'),
     path('<uuid:order_id>/cancel/', views.cancel_order, name='cancel_order'),
     
     # Legacy/Helper endpoints

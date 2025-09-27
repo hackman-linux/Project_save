@@ -1,4 +1,5 @@
 {% extends 'base/base.html' %}
+{% load static %}
 
 {% block title %}Notifications - Employee{% endblock %}
 
@@ -33,10 +34,10 @@
 {% block page_title %}Notifications{% endblock %}
 
 {% block page_actions %}
-<button class="btn btn-outline-primary me-2" onclick="markAllAsRead()">
+<button class="btn btn-outline-primary me-2" id="markAllReadBtn">
     <i class="bi bi-check-all me-2"></i>Mark All as Read
 </button>
-<button class="btn btn-outline-secondary" onclick="refreshNotifications()">
+<button class="btn btn-outline-secondary" id="refreshBtn">
     <i class="bi bi-arrow-clockwise me-2"></i>Refresh
 </button>
 {% endblock %}
@@ -45,11 +46,11 @@
 <!-- Notification Statistics -->
 <div class="row mb-4">
     <div class="col-md-3">
-        <div class="card stats-card text-white">
+        <div class="card stats-card bg-primary text-white">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h4 class="card-title mb-0">{{ total_notifications }}</h4>
+                        <h4 class="card-title mb-0">{{ total_notifications|default:0 }}</h4>
                         <p class="card-text">Total</p>
                     </div>
                     <i class="bi bi-bell fs-1 opacity-75"></i>
@@ -63,7 +64,7 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h4 class="card-title mb-0">{{ unread_notifications }}</h4>
+                        <h4 class="card-title mb-0">{{ unread_notifications|default:0 }}</h4>
                         <p class="card-text">Unread</p>
                     </div>
                     <i class="bi bi-bell-fill fs-1 opacity-75"></i>
@@ -77,7 +78,7 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h4 class="card-title mb-0">{{ order_notifications }}</h4>
+                        <h4 class="card-title mb-0">{{ order_notifications|default:0 }}</h4>
                         <p class="card-text">Order Updates</p>
                     </div>
                     <i class="bi bi-bag fs-1 opacity-75"></i>
@@ -91,7 +92,7 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h4 class="card-title mb-0">{{ system_notifications }}</h4>
+                        <h4 class="card-title mb-0">{{ system_notifications|default:0 }}</h4>
                         <p class="card-text">System Alerts</p>
                     </div>
                     <i class="bi bi-gear fs-1 opacity-75"></i>
@@ -111,35 +112,39 @@
                 </h5>
             </div>
             <div class="col-md-6">
-                <div class="row g-2">
-                    <div class="col-md-4">
-                        <select class="form-select" id="filterByType">
-                            <option value="">All Types</option>
-                            <option value="order">Order Updates</option>
-                            <option value="system">System Alerts</option>
-                            <option value="promotion">Promotions</option>
-                            <option value="menu">Menu Updates</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <select class="form-select" id="filterByStatus">
-                            <option value="">All Status</option>
-                            <option value="unread">Unread</option>
-                            <option value="read">Read</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <select class="form-select" id="filterByTime">
-                            <option value="">All Time</option>
-                            <option value="today">Today</option>
-                            <option value="week">This Week</option>
-                            <option value="month">This Month</option>
-                        </select>
-                    </div>
-                </div>
+                <form method="GET" id="filterForm" class="d-flex gap-2">
+                    <select class="form-select" name="type" id="filterByType">
+                        <option value="">All Types</option>
+                        <option value="order" {% if current_type_filter == 'order' %}selected{% endif %}>Order Updates</option>
+                        <option value="system" {% if current_type_filter == 'system' %}selected{% endif %}>System Alerts</option>
+                        <option value="payment" {% if current_type_filter == 'payment' %}selected{% endif %}>Payment</option>
+                        <option value="menu" {% if current_type_filter == 'menu' %}selected{% endif %}>Menu Updates</option>
+                    </select>
+                    
+                    <select class="form-select" name="status" id="filterByStatus">
+                        <option value="">All Status</option>
+                        <option value="unread" {% if current_status_filter == 'unread' %}selected{% endif %}>Unread</option>
+                        <option value="read" {% if current_status_filter == 'read' %}selected{% endif %}>Read</option>
+                    </select>
+                    
+                    <select class="form-select" name="time" id="filterByTime">
+                        <option value="">All Time</option>
+                        <option value="today" {% if current_time_filter == 'today' %}selected{% endif %}>Today</option>
+                        <option value="week" {% if current_time_filter == 'week' %}selected{% endif %}>This Week</option>
+                        <option value="month" {% if current_time_filter == 'month' %}selected{% endif %}>This Month</option>
+                    </select>
+                </form>
             </div>
         </div>
     </div>
+</div>
+
+<!-- Loading Indicator -->
+<div id="loadingIndicator" class="text-center py-3 d-none">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="mt-2">Loading notifications...</p>
 </div>
 
 <!-- Notifications List -->
@@ -147,303 +152,165 @@
     <div class="card-header">
         <h5 class="mb-0">
             <i class="bi bi-bell me-2"></i>Your Notifications
+            <span class="badge bg-secondary ms-2" id="notificationCount">{{ notifications|length }}</span>
         </h5>
     </div>
     <div class="card-body">
-    <div class="notifications-list" id="notificationsList">
-        {% for notification in notifications %}
-        <div class="notification-item d-flex align-items-start p-3 mb-2 rounded border {% if not notification.is_read %}unread bg-light{% else %}bg-white{% endif %}"
-             data-id="{{ notification.id }}"
-             data-type="{{ notification.type }}"
-             data-status="{% if notification.is_read %}read{% else %}unread{% endif %}">
-
-            <!-- Icon -->
-            <div class="notification-icon me-3 flex-shrink-0">
-                {% if notification.type == 'order' %}
-                    <div class="icon-circle bg-success">
-                        <i class="bi bi-bag text-white"></i>
-                    </div>
-                {% elif notification.type == 'system' %}
-                    <div class="icon-circle bg-warning">
-                        <i class="bi bi-gear text-white"></i>
-                    </div>
-                {% elif notification.type == 'promotion' %}
-                    <div class="icon-circle bg-info">
-                        <i class="bi bi-percent text-white"></i>
-                    </div>
-                {% else %}
-                    <div class="icon-circle bg-primary">
-                        <i class="bi bi-bell text-white"></i>
-                    </div>
-                {% endif %}
-            </div>
-
-            <!-- Content -->
-            <div class="notification-content flex-grow-1">
-                <div class="d-flex justify-content-between align-items-start mb-1 flex-wrap">
-                    <h6 class="notification-title mb-0">{{ notification.title }}</h6>
-
-                    <div class="notification-actions ms-auto d-flex align-items-center gap-1">
-                        <small class="text-muted">{{ notification.created_at|timesince }} ago</small>
-                        {% if not notification.is_read %}
-                            <button class="btn btn-sm btn-outline-primary mark-read-btn" aria-label="Mark as read">
-                                <i class="bi bi-check"></i>
-                            </button>
-                        {% endif %}
-                        <button class="btn btn-sm btn-outline-danger delete-btn" aria-label="Delete notification">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </div>
-                </div>
-
-                <p class="notification-message text-muted mb-2">{{ notification.message }}</p>
-
-                {% if notification.action_url %}
-                <div class="notification-action">
-                    <a href="{{ notification.action_url }}" class="btn btn-sm btn-primary" target="_blank">
-                        <i class="bi bi-arrow-right me-1"></i>View Details
-                    </a>
-                </div>
-                {% endif %}
-
-                <div class="notification-meta mt-2">
-                    {% if notification.type == 'order' %}
-                        <span class="badge bg-success">{{ notification.get_type_display }}</span>
-                    {% elif notification.type == 'system' %}
-                        <span class="badge bg-warning">{{ notification.get_type_display }}</span>
-                    {% elif notification.type == 'promotion' %}
-                        <span class="badge bg-info">{{ notification.get_type_display }}</span>
+        <div class="notifications-list" id="notificationsList">
+            {% for notification in notifications %}
+            <div class="notification-item {% if not notification.is_read %}unread{% endif %}" 
+                 data-id="{{ notification.id }}"
+                 data-type="{{ notification.notification_type }}"  
+                 data-status="{% if notification.is_read %}read{% else %}unread{% endif %}">
+                
+                <!-- Notification Icon -->
+                <div class="notification-icon">
+                    {% if notification.notification_type == 'order' %}  
+                        <div class="icon-circle bg-success">
+                            <i class="bi bi-bag text-white"></i>
+                        </div>
+                    {% elif notification.notification_type == 'system' %}
+                        <div class="icon-circle bg-warning">
+                            <i class="bi bi-gear text-white"></i>
+                        </div>
+                    {% elif notification.notification_type == 'payment' %}
+                        <div class="icon-circle bg-info">
+                            <i class="bi bi-credit-card text-white"></i>
+                        </div>
+                    {% elif notification.notification_type == 'menu' %}
+                        <div class="icon-circle bg-secondary">
+                            <i class="bi bi-menu-button-wide text-white"></i>
+                        </div>
                     {% else %}
-                        <span class="badge bg-primary">{{ notification.get_type_display }}</span>
-                    {% endif %}
-                    {% if not notification.is_read %}
-                        <span class="badge bg-warning text-dark">Unread</span>
+                        <div class="icon-circle bg-primary">
+                            <i class="bi bi-bell text-white"></i>
+                        </div>
                     {% endif %}
                 </div>
+
+                <!-- Notification Content -->
+                <div class="notification-content">
+                    <div class="notification-header">
+                        <h6 class="notification-title">{{ notification.title }}</h6>
+                        <div class="notification-actions">
+                            <small class="text-muted me-2">{{ notification.created_at|timesince }} ago</small>
+                            {% if not notification.is_read %}
+                                <button class="btn btn-sm btn-outline-primary mark-read-btn" 
+                                        data-id="{{ notification.id }}" 
+                                        title="Mark as read">
+                                    <i class="bi bi-check"></i>
+                                </button>
+                            {% endif %}
+                            <button class="btn btn-sm btn-outline-danger delete-btn" 
+                                    data-id="{{ notification.id }}" 
+                                    title="Delete notification">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <p class="notification-message">{{ notification.message }}</p>
+
+                    {% if notification.action_url %}
+                    <div class="notification-action">
+                        <a href="{{ notification.action_url }}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-arrow-right me-1"></i>
+                            {{ notification.action_text|default:"View Details" }}
+                        </a>
+                    </div>
+                    {% endif %}
+
+                    <div class="notification-meta">
+                        <span class="badge bg-{{ notification.notification_type|default:'primary' }}">
+                            {{ notification.notification_type|title|default:"General" }}
+                        </span>
+                        {% if notification.priority == 'high' %}
+                            <span class="badge bg-danger">High Priority</span>
+                        {% endif %}
+                        {% if not notification.is_read %}
+                            <span class="badge bg-warning text-dark">Unread</span>
+                        {% endif %}
+                    </div>
+                </div>
             </div>
+            {% empty %}
+            <div class="empty-notifications text-center py-5">
+                <i class="bi bi-bell fs-1 text-muted"></i>
+                <h5 class="mt-3 text-muted">No Notifications</h5>
+                <p class="text-muted">You're all caught up! No new notifications to display.</p>
+            </div>
+            {% endfor %}
         </div>
-        {% empty %}
-        <div class="text-center py-5">
-            <i class="bi bi-bell fs-1 text-muted"></i>
-            <h5 class="mt-3 text-muted">No Notifications</h5>
-            <p class="text-muted">You're all caught up! No new notifications.</p>
-        </div>
-        {% endfor %}
-    </div>
         
-        <!-- Load More Button -->
-        {% if has_more_notifications %}
-        <div class="text-center mt-4">
-            <button class="btn btn-outline-primary" onclick="loadMoreNotifications()">
-                <i class="bi bi-arrow-down me-2"></i>Load More Notifications
-            </button>
-        </div>
+        <!-- Pagination -->
+        {% if page_obj.has_other_pages %}
+        <nav aria-label="Notifications pagination" class="mt-4">
+            <ul class="pagination justify-content-center">
+                {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if current_type_filter %}&type={{ current_type_filter }}{% endif %}{% if current_status_filter %}&status={{ current_status_filter }}{% endif %}{% if current_time_filter %}&time={{ current_time_filter }}{% endif %}">
+                            Previous
+                        </a>
+                    </li>
+                {% endif %}
+                
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                        <li class="page-item active">
+                            <span class="page-link">{{ num }}</span>
+                        </li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ num }}{% if current_type_filter %}&type={{ current_type_filter }}{% endif %}{% if current_status_filter %}&status={{ current_status_filter }}{% endif %}{% if current_time_filter %}&time={{ current_time_filter }}{% endif %}">
+                                {{ num }}
+                            </a>
+                        </li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if current_type_filter %}&type={{ current_type_filter }}{% endif %}{% if current_status_filter %}&status={{ current_status_filter }}{% endif %}{% if current_time_filter %}&time={{ current_time_filter }}{% endif %}">
+                            Next
+                        </a>
+                    </li>
+                {% endif %}
+            </ul>
+        </nav>
         {% endif %}
+    </div>
+</div>
+
+<!-- Success/Error Messages Modal -->
+<div class="toast-container position-fixed top-0 end-0 p-3">
+    <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <i class="bi bi-bell-fill me-2"></i>
+            <strong class="me-auto">Notification</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body" id="toastMessage">
+            <!-- Message will be inserted here -->
+        </div>
     </div>
 </div>
 {% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/notifications.css' %}">
+{% endblock %}
+
 {% block extra_js %}
-<style>
-.notifications-list {
-    max-height: 600px;
-    overflow-y: auto;
-}
-
-.notification-item {
-    padding: 15px 0;
-    transition: all 0.3s ease;
-}
-
-.notification-item.unread {
-    background-color: #f8f9fa;
-    border-left: 4px solid #007bff;
-    padding-left: 15px;
-    margin-left: -15px;
-    border-radius: 0 8px 8px 0;
-}
-
-.icon-circle {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.notification-title {
-    font-weight: 600;
-    color: #2c3e50;
-}
-
-.notification-item.unread .notification-title {
-    color: #007bff;
-}
-
-.notification-message {
-    font-size: 0.9rem;
-    line-height: 1.4;
-}
-
-.notification-actions button {
-    margin-left: 5px;
-}
-
-.notification-item:hover {
-    background-color: #f5f5f5;
-}
-</style>
-
+<script src="{% static 'js/notifications.js' %}"></script>
 <script>
-class NotificationManager {
-    constructor() {
-        this.init();
-    }
-
-    init() {
-        this.setupEventListeners();
-        this.setupFilters();
-        this.startAutoRefresh();
-    }
-
-    setupEventListeners() {
-        // Filter listeners
-        document.getElementById('filterByType')?.addEventListener('change', () => {
-            this.filterNotifications();
+    // Initialize notifications manager when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        window.notificationManager = new NotificationManager({
+            markReadUrl: '/notifications/mark-as-read/',
+            deleteUrl: '/notifications/delete/',
+            markAllReadUrl: '/notifications/mark-all-read/',
+            csrfToken: '{{ csrf_token }}'
         });
-
-        document.getElementById('filterByStatus')?.addEventListener('change', () => {
-            this.filterNotifications();
-        });
-
-        document.getElementById('filterByTime')?.addEventListener('change', () => {
-            this.filterNotifications();
-        });
-    }
-
-    setupFilters() {
-        this.originalNotifications = Array.from(document.querySelectorAll('.notification-item'));
-    }
-
-    filterNotifications() {
-        const typeFilter = document.getElementById('filterByType').value;
-        const statusFilter = document.getElementById('filterByStatus').value;
-        const timeFilter = document.getElementById('filterByTime').value;
-
-        const notifications = document.querySelectorAll('.notification-item');
-        
-        notifications.forEach(notification => {
-            const type = notification.dataset.type;
-            const status = notification.dataset.status;
-            const createdAt = notification.querySelector('.text-muted').textContent;
-            
-            const matchesType = !typeFilter || type === typeFilter;
-            const matchesStatus = !statusFilter || status === statusFilter;
-            const matchesTime = this.matchesTimeFilter(createdAt, timeFilter);
-            
-            const shouldShow = matchesType && matchesStatus && matchesTime;
-            notification.style.display = shouldShow ? '' : 'none';
-        });
-    }
-
-    matchesTimeFilter(createdAt, timeFilter) {
-        if (!timeFilter) return true;
-        
-        // Simple time filtering logic (would need more sophisticated implementation)
-        switch(timeFilter) {
-            case 'today':
-                return createdAt.includes('hour') || createdAt.includes('minute');
-            case 'week':
-                return createdAt.includes('day') || createdAt.includes('hour') || createdAt.includes('minute');
-            case 'month':
-                return !createdAt.includes('year');
-            default:
-                return true;
-        }
-    }
-
-    startAutoRefresh() {
-        // Check for new notifications every 30 seconds
-        setInterval(() => {
-            this.checkForNewNotifications();
-        }, 30000);
-    }
-
-    checkForNewNotifications() {
-        fetch('/api/employee/notifications/count/')
-            .then(response => response.json())
-            .then(data => {
-                this.updateNotificationCount(data.unread_count);
-            })
-            .catch(error => console.error('Error checking notifications:', error));
-    }
-
-    updateNotificationCount(count) {
-        const badge = document.querySelector('.navbar .badge');
-        if (badge) {
-            badge.textContent = count;
-            badge.style.display = count > 0 ? 'inline' : 'none';
-        }
-    }
-}
-
-// Global functions
-document.addEventListener('DOMContentLoaded', function () {
-    const notificationsList = document.getElementById('notificationsList');
-
-    // Event delegation for mark as read
-    notificationsList.addEventListener('click', function(e){
-        if (e.target.closest('.mark-read-btn')) {
-            const item = e.target.closest('.notification-item');
-            const id = item.dataset.id;
-            markAsRead(id, item);
-        }
-        if (e.target.closest('.delete-btn')) {
-            const item = e.target.closest('.notification-item');
-            const id = item.dataset.id;
-            deleteNotification(id, item);
-        }
     });
-
-    function markAsRead(id, item) {
-        fetch(`/notifications/mark-as-read/${id}/`, {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}})
-        .then(res => {
-            if(res.ok){
-                item.classList.remove('unread', 'bg-light');
-                item.dataset.status = 'read';
-                const btn = item.querySelector('.mark-read-btn');
-                if(btn) btn.remove();
-                const unreadBadge = item.querySelector('.badge.bg-warning.text-dark');
-                if(unreadBadge) unreadBadge.remove();
-            }
-        });
-    }
-
-    function deleteNotification(id, item){
-        fetch(`/notifications/delete/${id}/`, {method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')}})
-        .then(res => {
-            if(res.ok){
-                item.remove();
-            }
-        });
-    }
-
-    // CSRF helper
-    function getCookie(name) {
-        let cookieValue = null;
-        if (document.cookie && document.cookie !== '') {
-            const cookies = document.cookie.split(';');
-            for (let i = 0; i < cookies.length; i++) {
-                const cookie = cookies[i].trim();
-                if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                    break;
-                }
-            }
-        }
-        return cookieValue;
-    }
-});
 </script>
 {% endblock %}
