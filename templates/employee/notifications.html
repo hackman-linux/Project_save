@@ -15,7 +15,7 @@
 <a class="nav-link" href="{% url 'employee:order_history' %}">
     <i class="bi bi-clock-history me-2"></i>Order History
 </a>
-<a class="nav-link active" href="{% url 'employee:notifications_list' %}">
+<a class="nav-link active" href="{% url 'notifications:notifications_list' %}">
     <i class="bi bi-bell me-2"></i>Notifications
     {% if unread_notifications > 0 %}
     <span class="badge bg-danger rounded-pill">{{ unread_notifications }}</span>
@@ -43,6 +43,15 @@
 {% endblock %}
 
 {% block content %}
+<!-- DEBUG SECTION - Remove after testing -->
+<div class="alert alert-info">
+    <h6>DEBUG INFO:</h6>
+    <p>Total notifications: {{ total_notifications }}</p>
+    <p>Notifications count: {{ notifications|length }}</p>
+    <p>User: {{ user.email }}</p>
+    <p>Unread: {{ unread_notifications }}</p>
+</div>
+
 <!-- Notification Statistics -->
 <div class="row mb-4">
     <div class="col-md-3">
@@ -139,14 +148,6 @@
     </div>
 </div>
 
-<!-- Loading Indicator -->
-<div id="loadingIndicator" class="text-center py-3 d-none">
-    <div class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Loading...</span>
-    </div>
-    <p class="mt-2">Loading notifications...</p>
-</div>
-
 <!-- Notifications List -->
 <div class="card">
     <div class="card-header">
@@ -157,89 +158,95 @@
     </div>
     <div class="card-body">
         <div class="notifications-list" id="notificationsList">
-            {% for notification in notifications %}
-            <div class="notification-item {% if not notification.is_read %}unread{% endif %}" 
-                 data-id="{{ notification.id }}"
-                 data-type="{{ notification.notification_type }}"  
-                 data-status="{% if notification.is_read %}read{% else %}unread{% endif %}">
-                
-                <!-- Notification Icon -->
-                <div class="notification-icon">
-                    {% if notification.notification_type == 'order' %}  
-                        <div class="icon-circle bg-success">
-                            <i class="bi bi-bag text-white"></i>
-                        </div>
-                    {% elif notification.notification_type == 'system' %}
-                        <div class="icon-circle bg-warning">
-                            <i class="bi bi-gear text-white"></i>
-                        </div>
-                    {% elif notification.notification_type == 'payment' %}
-                        <div class="icon-circle bg-info">
-                            <i class="bi bi-credit-card text-white"></i>
-                        </div>
-                    {% elif notification.notification_type == 'menu' %}
-                        <div class="icon-circle bg-secondary">
-                            <i class="bi bi-menu-button-wide text-white"></i>
-                        </div>
-                    {% else %}
-                        <div class="icon-circle bg-primary">
-                            <i class="bi bi-bell text-white"></i>
-                        </div>
-                    {% endif %}
-                </div>
+     <!-- Replace the notification loop in your template with this: -->
 
-                <!-- Notification Content -->
-                <div class="notification-content">
-                    <div class="notification-header">
-                        <h6 class="notification-title">{{ notification.title }}</h6>
-                        <div class="notification-actions">
-                            <small class="text-muted me-2">{{ notification.created_at|timesince }} ago</small>
-                            {% if not notification.is_read %}
-                                <button class="btn btn-sm btn-outline-primary mark-read-btn" 
-                                        data-id="{{ notification.id }}" 
-                                        title="Mark as read">
-                                    <i class="bi bi-check"></i>
-                                </button>
-                            {% endif %}
-                            <button class="btn btn-sm btn-outline-danger delete-btn" 
-                                    data-id="{{ notification.id }}" 
-                                    title="Delete notification">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-
-                    <p class="notification-message">{{ notification.message }}</p>
-
-                    {% if notification.action_url %}
-                    <div class="notification-action">
-                        <a href="{{ notification.action_url }}" class="btn btn-sm btn-primary">
-                            <i class="bi bi-arrow-right me-1"></i>
-                            {{ notification.action_text|default:"View Details" }}
-                        </a>
-                    </div>
-                    {% endif %}
-
-                    <div class="notification-meta">
-                        <span class="badge bg-{{ notification.notification_type|default:'primary' }}">
-                            {{ notification.notification_type|title|default:"General" }}
-                        </span>
-                        {% if notification.priority == 'high' %}
-                            <span class="badge bg-danger">High Priority</span>
-                        {% endif %}
-                        {% if not notification.is_read %}
-                            <span class="badge bg-warning text-dark">Unread</span>
-                        {% endif %}
-                    </div>
-                </div>
+{% for user_notification in notifications %}
+<div class="notification-item {% if not user_notification.is_read %}unread{% endif %}" 
+     data-id="{{ user_notification.id }}"
+     data-type="{{ user_notification.notification.notification_type }}"  
+     data-status="{% if user_notification.is_read %}read{% else %}unread{% endif %}">
+    
+    <!-- Notification Icon -->
+    <div class="notification-icon">
+        {% if user_notification.notification.notification_type == 'order' %}  
+            <div class="icon-circle bg-success">
+                <i class="bi bi-bag text-white"></i>
             </div>
-            {% empty %}
-            <div class="empty-notifications text-center py-5">
-                <i class="bi bi-bell fs-1 text-muted"></i>
-                <h5 class="mt-3 text-muted">No Notifications</h5>
-                <p class="text-muted">You're all caught up! No new notifications to display.</p>
+        {% elif user_notification.notification.notification_type == 'system' %}
+            <div class="icon-circle bg-warning">
+                <i class="bi bi-gear text-white"></i>
             </div>
-            {% endfor %}
+        {% elif user_notification.notification.notification_type == 'payment' %}
+            <div class="icon-circle bg-info">
+                <i class="bi bi-credit-card text-white"></i>
+            </div>
+        {% elif user_notification.notification.notification_type == 'menu' %}
+            <div class="icon-circle bg-secondary">
+                <i class="bi bi-menu-button-wide text-white"></i>
+            </div>
+        {% else %}
+            <div class="icon-circle bg-primary">
+                <i class="bi bi-bell text-white"></i>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Notification Content -->
+    <div class="notification-content">
+        <div class="notification-header">
+            <h6 class="notification-title">{{ user_notification.notification.title }}</h6>
+            <div class="notification-actions">
+                <small class="text-muted me-2">{{ user_notification.created_at|timesince }} ago</small>
+                {% if not user_notification.is_read %}
+                    <button class="btn btn-sm btn-outline-primary mark-read-btn" 
+                            data-id="{{ user_notification.id }}" 
+                            title="Mark as read">
+                        <i class="bi bi-check"></i>
+                    </button>
+                {% endif %}
+                <button class="btn btn-sm btn-outline-danger delete-btn" 
+                        data-id="{{ user_notification.id }}" 
+                        title="Delete notification">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+
+        <p class="notification-message">{{ user_notification.notification.message }}</p>
+
+        {% if user_notification.notification.action_url %}
+        <div class="notification-action">
+            <a href="{{ user_notification.notification.action_url }}" class="btn btn-sm btn-primary">
+                <i class="bi bi-arrow-right me-1"></i>
+                {{ user_notification.notification.action_text|default:"View Details" }}
+            </a>
+        </div>
+        {% endif %}
+
+        <div class="notification-meta">
+            <span class="badge bg-{{ user_notification.notification.notification_type|default:'primary' }}">
+                {{ user_notification.notification.notification_type|title|default:"General" }}
+            </span>
+            {% if user_notification.notification.priority == 'high' %}
+                <span class="badge bg-danger">High Priority</span>
+            {% endif %}
+            {% if not user_notification.is_read %}
+                <span class="badge bg-warning text-dark">Unread</span>
+            {% endif %}
+            {% if user_notification.notification.order %}
+                <span class="badge bg-secondary">Order #{{ user_notification.notification.order.order_number }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% empty %}
+<div class="empty-notifications text-center py-5">
+    <i class="bi bi-bell fs-1 text-muted"></i>
+    <h5 class="mt-3 text-muted">No Notifications</h5>
+    <p class="text-muted">You're all caught up! No new notifications to display.</p>
+</div>
+{% endfor %}
+
         </div>
         
         <!-- Pagination -->
@@ -301,12 +308,11 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'js/notifications.js' %}"></script>
 <script>
     // Initialize notifications manager when DOM is loaded
     document.addEventListener('DOMContentLoaded', function() {
         window.notificationManager = new NotificationManager({
-            markReadUrl: '/notifications/mark-as-read/',
+            markReadUrl: '/notifications/mark_read/',
             deleteUrl: '/notifications/delete/',
             markAllReadUrl: '/notifications/mark-all-read/',
             csrfToken: '{{ csrf_token }}'

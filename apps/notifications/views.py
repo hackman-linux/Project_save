@@ -17,141 +17,126 @@ import uuid
 import logging
 from django.db import DatabaseError
 from django.contrib.auth import get_user_model
+from .models import Notification, UserNotification
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 from .models import Notification
-from apps.authentication.models import User
+# from apps.authentication.models import User
 
 logger = logging.getLogger(__name__)
 
 
-def ensure_user(user):
-    """
-    Convert input to a User instance.
-    Accepts:
-      - User instance
-      - UUID object or string
-      - Email string
-    """
-    if isinstance(user, User):
-        return user
-    if isinstance(user, UUID):
-        return User.objects.get(id=user)
-    if isinstance(user, str):
-        # Try as UUID first
-        try:
-            uid = UUID(user)
-            return User.objects.get(id=uid)
-        except (ValueError, User.DoesNotExist):
-            # Treat as email
-            return User.objects.get(email=user)
-    raise ValueError(f"Cannot resolve user: {user}")
+# def ensure_user(user):
+#     """
+#     Convert input to a User instance.
+#     Accepts:
+#       - User instance
+#       - UUID object or string
+#       - Email string
+#     """
+#     if isinstance(user, User):
+#         return user
+#     if isinstance(user, UUID):
+#         return User.objects.get(id=user)
+#     if isinstance(user, str):
+#         # Try as UUID first
+#         try:
+#             uid = UUID(user)
+#             return User.objects.get(id=uid)
+#         except (ValueError, User.DoesNotExist):
+#             # Treat as email
+#             return User.objects.get(email=user)
+#     raise ValueError(f"Cannot resolve user: {user}")
+
+
 
 @login_required
 def notifications_list(request):
-    """Employee notifications list view with proper context"""
-    # Get all notifications for the logged-in user
-    all_notifications = Notification.objects.filter(target_user=request.user).order_by('-created_at')
-    
-    # Calculate statistics
-    total_notifications = all_notifications.count()
-    unread_notifications = all_notifications.filter(is_read=False).count()
-    order_notifications = all_notifications.filter(notification_type='order').count()
-    system_notifications = all_notifications.filter(notification_type='system').count()
-    
-    # Apply filters if provided
-    type_filter = request.GET.get('type', '')
-    status_filter = request.GET.get('status', '')
-    time_filter = request.GET.get('time', '')
-    
-    notifications = all_notifications
-    
-    # Filter by type
-    if type_filter:
-        notifications = notifications.filter(notification_type=type_filter)
-    
-    # Filter by status
-    if status_filter == 'unread':
+    user = request.user
+    notifications = UserNotification.objects.filter(user=user).select_related('notification').order_by('-created_at')
+
+    # Filters
+    notif_type = request.GET.get('type')
+    status = request.GET.get('status')
+    time_filter = request.GET.get('time')
+
+    if notif_type:
+        notifications = notifications.filter(notification__notification_type=notif_type)
+    if status == 'unread':
         notifications = notifications.filter(is_read=False)
-    elif status_filter == 'read':
+    elif status == 'read':
         notifications = notifications.filter(is_read=True)
-    
-    # Filter by time
-    if time_filter == 'today':
-        from django.utils import timezone
-        today = timezone.now().date()
-        notifications = notifications.filter(created_at__date=today)
-    elif time_filter == 'week':
-        from datetime import timedelta
-        week_ago = timezone.now() - timedelta(days=7)
-        notifications = notifications.filter(created_at__gte=week_ago)
-    elif time_filter == 'month':
-        from datetime import timedelta
-        month_ago = timezone.now() - timedelta(days=30)
-        notifications = notifications.filter(created_at__gte=month_ago)
-    
+    if time_filter:
+        now = timezone.now()
+        if time_filter == 'today':
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            notifications = notifications.filter(created_at__gte=start)
+        elif time_filter == 'week':
+            start = now - timedelta(days=7)
+            notifications = notifications.filter(created_at__gte=start)
+        elif time_filter == 'month':
+            start = now - timedelta(days=30)
+            notifications = notifications.filter(created_at__gte=start)
+
     # Pagination
-    paginator = Paginator(notifications, 20)
+    paginator = Paginator(notifications, 10)  # 10 notifications per page
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
-    
-    # Check if there are more notifications
-    has_more_notifications = notifications.count() > 20
-    
+
+    # Counts for dashboard cards
+    total_notifications = UserNotification.objects.filter(user=user).count()
+    unread_notifications = UserNotification.objects.filter(user=user, is_read=False).count()
+    order_notifications = UserNotification.objects.filter(user=user, notification__notification_type='order').count()
+    system_notifications = UserNotification.objects.filter(user=user, notification__notification_type='system').count()
+
     context = {
-        'notifications': page_obj.object_list,  # List of notifications for the template
+        'notifications': page_obj.object_list,
         'page_obj': page_obj,
         'total_notifications': total_notifications,
         'unread_notifications': unread_notifications,
         'order_notifications': order_notifications,
         'system_notifications': system_notifications,
-        'has_more_notifications': has_more_notifications,
-        # Pass back filter values
-        'current_type_filter': type_filter,
-        'current_status_filter': status_filter,
-        'current_time_filter': time_filter,
+        'current_type_filter': notif_type or '',
+        'current_status_filter': status or '',
+        'current_time_filter': time_filter or '',
     }
-    
     return render(request, 'employee/notifications.html', context)
 
 
 @login_required
-def mark_notification_read(request, notification_id):
-    """Mark a single notification as read"""
+def mark_notification_read(request):
+        if request.method == 'POST':
+            notif_id = request.POST.get('id')
+        if not notif_id:
+            return HttpResponseBadRequest('Missing ID')
+        notif = get_object_or_404(UserNotification, id=notif_id, user=request.user)
+        notif.is_read = True
+        notif.save()
+        return JsonResponse({'success': True})
+        return HttpResponseBadRequest('Invalid request method')
+
+
+@login_required
+def delete_notification(request):
     if request.method == 'POST':
-        try:
-            notification = get_object_or_404(Notification, id=notification_id, target_user=request.user)
-            notification.is_read = True
-            notification.save()
-            return JsonResponse({'success': True, 'message': 'Marked as read'})
-        except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)}, status=500)
-    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+        notif_id = request.POST.get('id')
+        if not notif_id:
+            return HttpResponseBadRequest('Missing ID')
+        notif = get_object_or_404(UserNotification, id=notif_id, user=request.user)
+        notif.delete()
+        return JsonResponse({'success': True})
+    return HttpResponseBadRequest('Invalid request method')
 
 @login_required
 def mark_all_read(request):
-    """Mark all notifications as read"""
     if request.method == 'POST':
-        try:
-            updated = Notification.objects.filter(target_user=request.user, is_read=False).update(is_read=True)
-            return JsonResponse({'success': True, 'message': f'{updated} notifications marked as read'})
-        except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)}, status=500)
-    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+        UserNotification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return JsonResponse({'success': True})
+    return HttpResponseBadRequest('Invalid request method')
 
-@login_required
-def delete_notification(request, notification_id):
-    """Delete a notification"""
-    if request.method == 'POST':
-        try:
-            notification = get_object_or_404(Notification, id=notification_id, target_user=request.user)
-            notification.delete()
-            return JsonResponse({'success': True, 'message': 'Notification deleted'})
-        except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)}, status=500)
-    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+
 
 @login_required
 def notification_preferences(request):
@@ -188,17 +173,74 @@ def notification_preferences(request):
     context = {'preferences': preferences}
     return render(request, 'notifications/preferences.html', context)
 
+# def send_notification(user, title, message, notification_type="system",
+#                       priority="normal", action_url=None, action_text=None,
+#                       target_audience="all", order=None, request=None):
+#     """
+#     Simple notification function that works with your existing database
+#     Uses the notifications_notification table with target_user_id FK
+#     """
+#     try:
+#         from django.contrib.auth import get_user_model
+#         import uuid
+        
+#         User = get_user_model()
+        
+#         # Ensure we have a User instance
+#         if isinstance(user, str):
+#             try:
+#                 user_obj = User.objects.get(id=user)
+#             except User.DoesNotExist:
+#                 user_obj = User.objects.get(email=user)
+#         else:
+#             user_obj = user
+
+#         # Create notification with explicit is_read=False
+#         from .models import Notification
+#         notification = Notification.objects.create(
+#             id=str(uuid.uuid4()),
+#             target_user=user_obj,  # This should match your FK field
+#             order=order,
+#             created_by=request.user if request and hasattr(request, "user") and request.user.is_authenticated else None,
+#             title=title,
+#             message=message,
+#             notification_type=notification_type,
+#             priority=priority,
+#             action_url=action_url or "",
+#             action_text=action_text or "",
+#             target_audience=target_audience,
+#             is_read=False  # Explicitly set this
+#         )
+        
+#         logger.info(f"Notification created for user {user_obj.email}: {title}")
+#         return notification
+        
+#     except Exception as e:
+#         logger.error(f"Error creating notification for user {user}: {str(e)}", exc_info=True)
+#         return None
+
 def send_notification(user, title, message, notification_type="system",
                       priority="normal", action_url=None, action_text=None,
                       target_audience="all", order=None, request=None):
     """
-    Create a notification for a user using Django ORM (no raw SQL)
-    `user` can be a User instance, UUID string, UUID object, or email.
+    Create notification in both tables
     """
     try:
-        user_obj = ensure_user(user)
+        from django.contrib.auth import get_user_model
+        import uuid
         
-        # Use Django ORM instead of raw SQL
+        User = get_user_model()
+        
+        # Ensure we have a User instance
+        if isinstance(user, str):
+            try:
+                user_obj = User.objects.get(id=user)
+            except User.DoesNotExist:
+                user_obj = User.objects.get(email=user)
+        else:
+            user_obj = user
+
+        # Step 1: Create notification in notifications_notification
         notification = Notification.objects.create(
             target_user=user_obj,
             order=order,
@@ -213,42 +255,84 @@ def send_notification(user, title, message, notification_type="system",
             is_read=False
         )
         
+        # Step 2: Create link in notifications_usernotification
+        user_notification = UserNotification.objects.create(
+            user=user_obj,
+            notification=notification,
+            is_read=False
+        )
+        
+        logger.info(f"✅ Notification created: {notification.id}, UserNotification: {user_notification.id}")
         return notification
         
     except Exception as e:
-        logger.error(f"Error creating notification for user {user}: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error creating notification: {str(e)}", exc_info=True)
         return None
 
-def send_bulk_notification(users, title, message, notification_type='system', target_audience='all', departments=None):
+
+def send_bulk_notification(users, title, message, notification_type="system",
+                          priority="normal", action_url=None, action_text=None,
+                          target_audience="all", order=None, request=None):
+    """
+    Send notification to multiple users efficiently
+    Creates one notification record and multiple UserNotification records
+    
+    Args:
+        users: List of User instances
+        Other args same as send_notification
+    
+    Returns:
+        tuple: (success_count, failed_users)
+    """
     try:
-        notifications_created = 0
+        # Step 1: Create the main notification once
+        notification = Notification.objects.create(
+            id=str(uuid.uuid4()),
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            priority=priority,
+            action_url=action_url or "",
+            action_text=action_text or "",
+            target_audience=target_audience,
+            order=order,
+            created_by=request.user if request and hasattr(request, "user") and request.user.is_authenticated else None,
+            created_at=timezone.now()
+        )
+
+        # Step 2: Create UserNotification records for each user
+        user_notifications = []
         failed_users = []
-        action_url = '/notifications/'  # Default action URL
-        action_text = 'View Notification'  # Default action text
+        
         for user in users:
-            notification = send_notification(
-                user=user,
-                title=title,
-                message=message,
-                notification_type=notification_type,
-                priority='normal',
-                action_url=action_url,
-                action_text=action_text,
-                target_audience=target_audience
-            )
-            if notification:
-                notifications_created += 1
-            else:
-                failed_users.append(str(user.id))
-        logger.info(f'Bulk notification sent to {notifications_created} users, failed for {len(failed_users)} users')
-        return notifications_created, failed_users
+            try:
+                user_notifications.append(
+                    UserNotification(
+                        user=user,
+                        notification=notification,
+                        is_read=False
+                    )
+                )
+            except Exception as e:
+                failed_users.append(str(user.id) if hasattr(user, 'id') else str(user))
+                logger.warning(f"Failed to prepare notification for user {user}: {e}")
+
+        # Bulk create for efficiency
+        UserNotification.objects.bulk_create(user_notifications)
+        
+        success_count = len(user_notifications)
+        logger.info(f"Bulk notification sent to {success_count} users, failed for {len(failed_users)} users")
+        
+        return success_count, failed_users
+
     except Exception as e:
-        logger.error(f'Error sending bulk notification: {str(e)}', exc_info=True)
-        return 0, [str(user.id) for user in users]
+        logger.error(f"Error sending bulk notification: {str(e)}", exc_info=True)
+        return 0, [str(user.id) if hasattr(user, 'id') else str(user) for user in users]
+
 
 
 class SystemNotificationManagementView(LoginRequiredMixin, UserPassesTestMixin, TemplateView):
-    template_name = 'notifications.html'
+    template_name = 'canteen_admin/notifications.html'
     def test_func(self):
         return self.request.user.is_canteen_admin or self.request.user.is_superuser
     def get_context_data(self, **kwargs):
@@ -491,12 +575,11 @@ def notifications_page(request):
         'type_filter': type_filter,
         'status_filter': status_filter,
     }
-    return render(request, 'notifications.html', context)
+    return render(request, 'employee/notifications.html', context)
 
 def send_order_notification(order, notification_type, additional_context=None):
     """
-    Send order-related notifications to customer or employee.
-    `order` is an Order instance.
+    Updated function to work with junction table system
     """
     try:
         user = getattr(order, "customer", None) or getattr(order, "employee", None)
@@ -504,55 +587,47 @@ def send_order_notification(order, notification_type, additional_context=None):
             logger.warning(f"No user found for order {order.id}")
             return None
 
-        context = {
-            'order': order,
-            'user': user,
-            'order_number': getattr(order, 'order_number', str(order.id)),
-            'total_amount': getattr(order, 'total_amount', None),
-            'status': getattr(order, 'get_status_display', lambda: str(getattr(order, 'status', 'Unknown')))(),
-        }
-
-        if additional_context:
-            context.update(additional_context)
-
         # Determine notification content
         if notification_type == 'order_confirmed':
-            title = f"Order {context['order_number']} Confirmed"
-            message = "Your order has been confirmed and is being prepared."
-            action_url = f"/orders/{order.id}/"  # Simple URL instead of reverse
-            action_text = "View Order"
+            title = f"Order {order.order_number} Confirmed"
+            message = "Your order has been confirmed. Please proceed to payment."
+            action_url = f"/orders/{order.id}/payment/"
+            action_text = "Proceed to Payment"
 
         elif notification_type == 'order_ready':
-            title = f"Order {context['order_number']} Ready"
+            title = f"Order {order.order_number} Ready"
             message = "Your order is ready for pickup!"
-            action_url = f"/orders/{order.id}/"
+            action_url = f"/orders/{order.id}/detail/"
             action_text = "View Order"
 
         elif notification_type == 'order_cancelled':
-            title = f"Order {context['order_number']} Cancelled"
-            message = "Your order has been cancelled."
-            action_url = f"/orders/{order.id}/"
+            title = f"Order {order.order_number} Cancelled"
+            message = "Your order has been cancelled by the canteen admin."
+            action_url = f"/orders/{order.id}/detail/"
             action_text = "View Details"
 
         elif notification_type == 'order_delayed':
-            title = f"Order {context['order_number']} Delayed"
+            title = f"Order {order.order_number} Delayed"
             message = "Your order is taking longer than expected. We apologize for the delay."
-            action_url = f"/orders/{order.id}/"
+            action_url = f"/orders/{order.id}/detail/"
             action_text = "View Order"
 
         else:
-            title = f"Order {context['order_number']} Update"
+            title = f"Order {order.order_number} Update"
             message = "Your order status has been updated."
-            action_url = f"/orders/{order.id}/"
+            action_url = f"/orders/{order.id}/detail/"
             action_text = "View Order"
 
+        # Send notification using the clean system
         return send_notification(
             user=user,
             title=title,
             message=message,
             notification_type='order',
+            priority='normal',
             action_url=action_url,
             action_text=action_text,
+            target_audience='specific_user',
             order=order
         )
 
@@ -663,36 +738,36 @@ def send_menu_notification(users, notification_type, additional_context=None):
         return 0
 
 
-@login_required
-def get_real_time_notifications(request):
-    """Get real-time notifications for AJAX polling"""
-    # Get notifications created in the last 5 minutes
-    five_minutes_ago = timezone.now() - timezone.timedelta(minutes=5)
+# @login_required
+# def get_real_time_notifications(request):
+#     """Get real-time notifications for AJAX polling"""
+#     # Get notifications created in the last 5 minutes
+#     five_minutes_ago = timezone.now() - timezone.timedelta(minutes=5)
     
-    recent_notifications = UserNotification.objects.filter(
-        user=request.user,
-        created_at__gte=five_minutes_ago,
-        is_read=False
-    ).select_related('notification').order_by('-created_at')
+#     recent_notifications = UserNotification.objects.filter(
+#         user=request.user,
+#         created_at__gte=five_minutes_ago,
+#         is_read=False
+#     ).select_related('notification').order_by('-created_at')
     
-    notifications_data = []
-    for user_notification in recent_notifications:
-        notification = user_notification.notification
-        notifications_data.append({
-            'id': str(user_notification.id),
-            'title': notification.title,
-            'message': notification.message,
-            'type': notification.notification_type,
-            'priority': notification.priority,
-            'created_at': user_notification.created_at.isoformat(),
-            'action_url': notification.action_url,
-            'action_text': notification.action_text
-        })
+#     notifications_data = []
+#     for user_notification in recent_notifications:
+#         notification = user_notification.notification
+#         notifications_data.append({
+#             'id': str(user_notification.id),
+#             'title': notification.title,
+#             'message': notification.message,
+#             'type': notification.notification_type,
+#             'priority': notification.priority,
+#             'created_at': user_notification.created_at.isoformat(),
+#             'action_url': notification.action_url,
+#             'action_text': notification.action_text
+#         })
     
-    return JsonResponse({
-        'notifications': notifications_data,
-        'count': len(notifications_data)
-    })
+#     return JsonResponse({
+#         'notifications': notifications_data,
+#         'count': len(notifications_data)
+#     })
 
 
 @login_required
@@ -753,4 +828,61 @@ def notifications_page(request):
         "scheduled_notifications": 0,  # you don’t have scheduling
     }
 
-    return render(request, "canteen_admin/notifications.html", context)
+    return render(request, "employee/notifications.html", context)
+
+@login_required
+def notification_count(request):
+    try:
+        unread_count = UserNotification.objects.filter(
+            user=request.user,
+            is_read=False
+        ).count()
+        return JsonResponse({'success': True, 'unread_count': unread_count})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+def fetch_notifications(request):
+    user = request.user
+
+    # --- 1. Notifications via UserNotification ---
+    linked_qs = (
+    UserNotification.objects.filter(user_id=user.id)
+    .select_related("notification", "notification__order")
+    )
+    print("DEBUG linked_qs IDs:", list(linked_qs.values_list("id", flat=True)))
+
+
+    # --- 2. Direct notifications ---
+    direct_qs = Notification.objects.filter(target_user_id=user.id)
+    print("DEBUG direct_qs IDs:", list(direct_qs.values_list("id", flat=True)))
+
+    direct_wrapped = [
+        UserNotification(
+            id=f"direct-{n.id}",
+            user=user,
+            notification=n,
+            is_read=n.is_read,
+            created_at=n.created_at,
+        )
+        for n in direct_qs
+    ]
+
+    # --- 3. Combine ---
+    all_notifications = list(linked_qs) + direct_wrapped
+
+    # --- 4. Sort ---
+    all_notifications.sort(key=lambda x: x.created_at, reverse=True)
+
+    # --- 5. Paginate ---
+    paginator = Paginator(all_notifications, 20)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    # --- 6. Render partial template ---
+    return render(
+        request,
+        "employee/notifications.html",
+        {"notifications": page_obj.object_list, "page_obj": page_obj},
+    )

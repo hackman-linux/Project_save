@@ -334,6 +334,7 @@ def process_topup(request):
 def cancel_order(request, order_id):
     """
     Cancel an order and notify the employee
+    Creates notification in both tables: notifications_notification and notifications_usernotification
     """
     try:
         # Get the order
@@ -359,92 +360,93 @@ def cancel_order(request, order_id):
             notes="Order cancelled by canteen admin"
         )
 
-        # FIXED: Notify the employee with correct parameters
-        notification_sent = send_notification(
-            user=order.employee,                    # User object (correct)
-            title="Order Cancelled",
-            message=f"Your order {order.order_number} has been cancelled by the canteen admin.",
-            notification_type="order",
-            priority="high",
-            action_url=reverse("orders:detail", args=[order.id]),  # Use existing detail route
-            action_text="View Order Details",
-            target_audience="specific_user",
-            order=order,                           # Order parameter in correct position
-            request=request                        # Request parameter in correct position
-        )
-        
-        if notification_sent:
-            logger.info(f"Cancellation notification sent for order {order.order_number}")
-        else:
-            logger.warning(f"Failed to send cancellation notification for order {order.order_number}")
-
-        messages.success(request, f"Order {order.order_number} has been cancelled successfully.")
-
-    except Exception as e:
-        logger.error(f"Error cancelling order {order_id}: {str(e)}")
-        messages.error(request, f"Error cancelling order {order.order_number}: {str(e)}")
-
-    return redirect("orders:manage")
-
-
-# Alternative AJAX version of cancel_order
-@user_passes_test(is_canteen_admin)
-@login_required
-@require_POST
-def cancel_order_ajax(request, order_id):
-    """
-    Cancel an order via AJAX request
-    """
-    try:
-        order = get_object_or_404(Order, id=order_id)
-        
-        if order.status == Order.STATUS_CANCELLED:
-            return JsonResponse({
-                "success": False,
-                "message": "Order is already cancelled"
-            })
-        
-        # Update order status
-        old_status = order.status
-        order.status = Order.STATUS_CANCELLED
-        order.cancelled_at = timezone.now()
-        order.save()
-        
-        # Log history
-        OrderHistory.objects.create(
-            order=order,
-            status_from=old_status,
-            status_to=Order.STATUS_CANCELLED,
-            changed_by=request.user,
-            notes="Order cancelled by canteen admin"
-        )
-
-        # Notify employee
+        # FIXED: Send notification using send_notification function
+        # This will create records in both tables automatically
         notification_sent = send_notification(
             user=order.employee,
-            title="Order Cancelled",
+            title=f"Order {order.order_number} Cancelled",
             message=f"Your order {order.order_number} has been cancelled by the canteen admin.",
             notification_type="order",
             priority="high",
-            action_url=reverse("orders:detail", args=[order.id]),
+            action_url=f"/orders/{order.id}/detail/",
             action_text="View Order Details",
             target_audience="specific_user",
             order=order,
             request=request
         )
         
-        return JsonResponse({
-            "success": True,
-            "message": f"Order {order.order_number} cancelled successfully",
-            "notification_sent": notification_sent is not None
-        })
-        
+        if notification_sent:
+            logger.info(f"Cancellation notification created for order {order.order_number}")
+            messages.success(request, f"Order {order.order_number} cancelled and employee notified.")
+        else:
+            logger.warning(f"Failed to create cancellation notification for order {order.order_number}")
+            messages.warning(request, f"Order {order.order_number} cancelled but notification failed.")
+
     except Exception as e:
-        logger.error(f"Error cancelling order {order_id}: {str(e)}")
-        return JsonResponse({
-            "success": False,
-            "message": f"Error cancelling order: {str(e)}"
-        }, status=500)
+        logger.error(f"Error cancelling order {order_id}: {str(e)}", exc_info=True)
+        messages.error(request, f"Error cancelling order: {str(e)}")
+
+    return redirect("orders:manage")
+
+
+# # Alternative AJAX version of cancel_order
+# @user_passes_test(is_canteen_admin)
+# @login_required
+# @require_POST
+# def cancel_order_ajax(request, order_id):
+#     """
+#     Cancel an order via AJAX request
+#     """
+#     try:
+#         order = get_object_or_404(Order, id=order_id)
+        
+#         if order.status == Order.STATUS_CANCELLED:
+#             return JsonResponse({
+#                 "success": False,
+#                 "message": "Order is already cancelled"
+#             })
+        
+#         # Update order status
+#         old_status = order.status
+#         order.status = Order.STATUS_CANCELLED
+#         order.cancelled_at = timezone.now()
+#         order.save()
+        
+#         # Log history
+#         OrderHistory.objects.create(
+#             order=order,
+#             status_from=old_status,
+#             status_to=Order.STATUS_CANCELLED,
+#             changed_by=request.user,
+#             notes="Order cancelled by canteen admin"
+#         )
+
+#         # Notify employee
+#         notification_sent = send_notification(
+#             user=order.employee,
+#             title="Order Cancelled",
+#             message=f"Your order {order.order_number} has been cancelled by the canteen admin.",
+#             notification_type="order",
+#             priority="high",
+#             action_url=reverse("orders:detail", args=[order.id]),
+#             action_text="View Order Details",
+#             target_audience="specific_user",
+#             order=order,
+#             request=request
+#         )
+        
+#         return JsonResponse({
+#             "success": True,
+#             "message": f"Order {order.order_number} cancelled successfully",
+#             "notification_sent": notification_sent is not None
+#         })
+        
+#     except Exception as e:
+#         logger.error(f"Error cancelling order {order_id}: {str(e)}")
+#         return JsonResponse({
+#             "success": False,
+#             "message": f"Error cancelling order: {str(e)}"
+#         }, status=500)
 
 
 @login_required
