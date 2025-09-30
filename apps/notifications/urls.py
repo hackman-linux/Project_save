@@ -8,11 +8,13 @@ urlpatterns = [
     path('', views.notifications_list, name='notifications_list'),
     path('mark_read/<uuid:notification_id>/', views.mark_notification_read, name='mark_notification_read'),
     path('mark-all-read/', views.mark_all_read, name='mark_all_read'),
+    path("unread-count/", views.unread_count, name="unread_count"),
+    path("notifications/api/", views.notifications_api, name="notifications_api"),
     path('delete/<uuid:notification_id>/', views.delete_notification, name='delete_notification'),
     path('preferences/', views.notification_preferences, name='notification_preferences'),
-    # path('real-time/', views.get_real_time_notifications, name='real_time'),
+    path('real-time/', views.get_real_time_notifications, name='real_time'),
     path('stats/', views.notification_stats_api, name='stats_api'),
-    path("notifications/", views.notifications_page, name="notifications_page"),
+    path("admin/notifications/", views.admin_notifications_list, name="notifications_page"),
     # System notification management
     path('system/management/', views.system_notification_management, name='system_notification_management'),
     path('system/send/', views.send_system_notification, name='send_system_notification'),
@@ -20,7 +22,6 @@ urlpatterns = [
     path('api/templates/', views.notification_templates_api, name='notification_templates_api'),
     path('api/templates/create/', views.create_notification_template, name='create_notification_template'),
     path('count/', views.notification_count, name='notification_count'),
-    path('fetch/', views.fetch_notifications, name='fetch_notifications'),
 
     
 ]

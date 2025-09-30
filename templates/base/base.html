@@ -190,12 +190,14 @@
             <div class="navbar-nav ms-auto d-flex flex-row">
                 <!-- Notifications -->
 <div class="nav-item dropdown me-3">
-    <a class="nav-link position-relative" href="#" id="notificationDropdown" role="button" data-bs-toggle="dropdown">
-        <i class="bi bi-bell fs-5"></i>
-        <span class="badge bg-danger rounded-pill notification-badge" id="notificationCount">
-            {{ unread_count|default:0 }}
-        </span>
-    </a>
+    <a class="nav-link active" href="{% url 'employee:notifications_list' %}">
+    <i class="bi bi-bell me-2"></i>Notifications
+    <span id="notificationBadge" 
+          class="badge bg-danger rounded-pill" 
+          style="display: {% if unread_notifications > 0 %}inline{% else %}none{% endif %};">
+        {{ unread_notifications }}
+    </span>
+</a>
     <ul class="dropdown-menu dropdown-menu-end p-0" style="min-width: 350px; max-height: 400px; overflow-y: auto;">
         <li class="dropdown-header px-3 py-2">Notifications</li>
         <li><hr class="dropdown-divider"></li>
@@ -357,6 +359,77 @@
     
     <!-- Custom JavaScript -->
     <script>
+
+        $(document).ready(function() {
+    function fetchNotifications() {
+        $.ajax({
+            url: "{% url 'employee:notifications_api' %}", // Create this endpoint in Django
+            type: "GET",
+            success: function(response) {
+                // Update notification count
+                const unreadCount = response.unread_count || 0;
+                const $counter = $("#notificationCount");
+
+                $counter.text(unreadCount);
+                if (unreadCount > 0) {
+                    $counter.show();
+                } else {
+                    $counter.hide();
+                }
+
+                // Update dropdown list
+                let html = "";
+                if (response.notifications.length > 0) {
+                    response.notifications.forEach(n => {
+                        html += `
+                        <div class="dropdown-item d-flex align-items-start notification-item ${n.is_read ? '' : 'unread'}" 
+                             data-notification-id="${n.id}">
+                            <div class="notification-icon me-2">
+                                ${getIcon(n.type)}
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <span class="notification-title">${n.title}</span>
+                                    <small class="text-muted ms-2">${n.timesince} ago</small>
+                                </div>
+                                <div>
+                                    <small class="text-muted">${n.message}</small>
+                                </div>
+                                ${n.is_read ? "" : `
+                                <button class="btn btn-sm btn-outline-primary mt-1" onclick="markAsRead(${n.id})">
+                                    <i class="bi bi-check"></i>
+                                </button>`}
+                            </div>
+                        </div>
+                        <hr class="my-1">`;
+                    });
+                } else {
+                    html = `
+                    <div class="text-center py-3">
+                        <small class="text-muted">You're all caught up! No new notifications.</small>
+                    </div>`;
+                }
+
+                $("#notificationsListDropdown").html(html);
+            }
+        });
+    }
+
+    function getIcon(type) {
+        switch(type) {
+            case "order": return '<i class="bi bi-bag text-success"></i>';
+            case "system": return '<i class="bi bi-gear text-warning"></i>';
+            case "promotion": return '<i class="bi bi-percent text-info"></i>';
+            default: return '<i class="bi bi-bell text-primary"></i>';
+        }
+    }
+
+    // Fetch notifications every 10 seconds
+    setInterval(fetchNotifications, 10000);
+
+    // Initial fetch
+    fetchNotifications();
+});
         
         function showToast(message, type = 'info') {
     const toast = document.createElement('div');
@@ -453,6 +526,35 @@
                 }, 1000);
             }
         });
+
+        document.addEventListener("DOMContentLoaded", function () {
+    const badge = document.getElementById("notificationBadge");
+
+    async function fetchUnreadCount() {
+        try {
+            const response = await fetch("{% url 'notifications:unread_count' %}");
+            if (!response.ok) return;
+
+            const data = await response.json();
+            const count = data.unread_count;
+
+            if (count > 0) {
+                badge.style.display = "inline";
+                badge.textContent = count;
+            } else {
+                badge.style.display = "none";
+            }
+        } catch (error) {
+            console.error("Error fetching unread count:", error);
+        }
+    }
+
+    // First load
+    fetchUnreadCount();
+
+    // Poll every 10 seconds
+    setInterval(fetchUnreadCount, 10000);
+});
     </script>
     
     {% block extra_js %}{% endblock %}

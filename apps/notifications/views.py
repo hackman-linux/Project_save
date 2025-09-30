@@ -15,6 +15,7 @@ from django.utils.html import strip_tags
 import json
 import uuid
 import logging
+from datetime import timedelta
 from django.db import DatabaseError
 from django.contrib.auth import get_user_model
 from .models import Notification, UserNotification
@@ -55,7 +56,11 @@ logger = logging.getLogger(__name__)
 @login_required
 def notifications_list(request):
     user = request.user
-    notifications = UserNotification.objects.filter(user=user).select_related('notification').order_by('-created_at')
+    
+    # Query notifications
+    notifications = UserNotification.objects.filter(
+        user=user
+    ).select_related('notification', 'notification__order').order_by('-created_at')
 
     # Filters
     notif_type = request.GET.get('type')
@@ -68,6 +73,7 @@ def notifications_list(request):
         notifications = notifications.filter(is_read=False)
     elif status == 'read':
         notifications = notifications.filter(is_read=True)
+    
     if time_filter:
         now = timezone.now()
         if time_filter == 'today':
@@ -81,15 +87,21 @@ def notifications_list(request):
             notifications = notifications.filter(created_at__gte=start)
 
     # Pagination
-    paginator = Paginator(notifications, 10)  # 10 notifications per page
+    paginator = Paginator(notifications, 10)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
 
     # Counts for dashboard cards
     total_notifications = UserNotification.objects.filter(user=user).count()
     unread_notifications = UserNotification.objects.filter(user=user, is_read=False).count()
-    order_notifications = UserNotification.objects.filter(user=user, notification__notification_type='order').count()
-    system_notifications = UserNotification.objects.filter(user=user, notification__notification_type='system').count()
+    order_notifications = UserNotification.objects.filter(
+        user=user, 
+        notification__notification_type='order'
+    ).count()
+    system_notifications = UserNotification.objects.filter(
+        user=user, 
+        notification__notification_type='system'
+    ).count()
 
     context = {
         'notifications': page_obj.object_list,
@@ -102,8 +114,8 @@ def notifications_list(request):
         'current_status_filter': status or '',
         'current_time_filter': time_filter or '',
     }
+    
     return render(request, 'employee/notifications.html', context)
-
 
 @login_required
 def mark_notification_read(request):
@@ -738,36 +750,36 @@ def send_menu_notification(users, notification_type, additional_context=None):
         return 0
 
 
-# @login_required
-# def get_real_time_notifications(request):
-#     """Get real-time notifications for AJAX polling"""
-#     # Get notifications created in the last 5 minutes
-#     five_minutes_ago = timezone.now() - timezone.timedelta(minutes=5)
+@login_required
+def get_real_time_notifications(request):
+    """Get real-time notifications for AJAX polling"""
+    # Get notifications created in the last 5 minutes
+    five_minutes_ago = timezone.now() - timezone.timedelta(minutes=5)
     
-#     recent_notifications = UserNotification.objects.filter(
-#         user=request.user,
-#         created_at__gte=five_minutes_ago,
-#         is_read=False
-#     ).select_related('notification').order_by('-created_at')
+    recent_notifications = UserNotification.objects.filter(
+        user=request.user,
+        created_at__gte=five_minutes_ago,
+        is_read=False
+    ).select_related('notification').order_by('-created_at')
     
-#     notifications_data = []
-#     for user_notification in recent_notifications:
-#         notification = user_notification.notification
-#         notifications_data.append({
-#             'id': str(user_notification.id),
-#             'title': notification.title,
-#             'message': notification.message,
-#             'type': notification.notification_type,
-#             'priority': notification.priority,
-#             'created_at': user_notification.created_at.isoformat(),
-#             'action_url': notification.action_url,
-#             'action_text': notification.action_text
-#         })
+    notifications_data = []
+    for user_notification in recent_notifications:
+        notification = user_notification.notification
+        notifications_data.append({
+            'id': str(user_notification.id),
+            'title': notification.title,
+            'message': notification.message,
+            'type': notification.notification_type,
+            'priority': notification.priority,
+            'created_at': user_notification.created_at.isoformat(),
+            'action_url': notification.action_url,
+            'action_text': notification.action_text
+        })
     
-#     return JsonResponse({
-#         'notifications': notifications_data,
-#         'count': len(notifications_data)
-#     })
+    return JsonResponse({
+        'notifications': notifications_data,
+        'count': len(notifications_data)
+    })
 
 
 @login_required
@@ -810,7 +822,7 @@ def notification_stats_api(request):
     })
 
 @login_required
-def notifications_page(request):
+def admin_notifications_list(request):
     if not request.user.is_canteen_admin():
         return JsonResponse({'error': 'Unauthorized'}, status=403)
 
@@ -828,7 +840,7 @@ def notifications_page(request):
         "scheduled_notifications": 0,  # you don’t have scheduling
     }
 
-    return render(request, "employee/notifications.html", context)
+    return render(request, "canteen_admin/notifications.html", context)
 
 @login_required
 def notification_count(request):
@@ -842,47 +854,73 @@ def notification_count(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
+# @login_required
+# def fetch_notifications(request):
+#     user = request.user
+
+#     # --- 1. Notifications via UserNotification ---
+#     linked_qs = (
+#     UserNotification.objects.filter(user_id=user.id)
+#     .select_related("notification", "notification__order")
+#     )
+#     print("DEBUG linked_qs IDs:", list(linked_qs.values_list("id", flat=True)))
+
+
+#     # --- 2. Direct notifications ---
+#     direct_qs = Notification.objects.filter(target_user_id=user.id)
+#     print("DEBUG direct_qs IDs:", list(direct_qs.values_list("id", flat=True)))
+
+#     direct_wrapped = [
+#         UserNotification(
+#             id=f"direct-{n.id}",
+#             user=user,
+#             notification=n,
+#             is_read=n.is_read,
+#             created_at=n.created_at,
+#         )
+#         for n in direct_qs
+#     ]
+
+#     # --- 3. Combine ---
+#     all_notifications = list(linked_qs) + direct_wrapped
+
+#     # --- 4. Sort ---
+#     all_notifications.sort(key=lambda x: x.created_at, reverse=True)
+
+#     # --- 5. Paginate ---
+#     paginator = Paginator(all_notifications, 20)
+#     page_number = request.GET.get("page")
+#     page_obj = paginator.get_page(page_number)
+
+#     # --- 6. Render partial template ---
+#     return render(
+#         request,
+#         "employee/notifications.html",
+#         {"notifications": page_obj.object_list, "page_obj": page_obj},
+#     )
+
+
 @login_required
-def fetch_notifications(request):
-    user = request.user
+def unread_count(request):
+    unread = UserNotification.objects.filter(user=request.user, is_read=False).count()
+    return JsonResponse({"unread_count": unread})
 
-    # --- 1. Notifications via UserNotification ---
-    linked_qs = (
-    UserNotification.objects.filter(user_id=user.id)
-    .select_related("notification", "notification__order")
-    )
-    print("DEBUG linked_qs IDs:", list(linked_qs.values_list("id", flat=True)))
+def notifications_api(request):
+    notifications = Notification.objects.filter(user=request.user).order_by('-created_at')[:10]
+    unread_count = notifications.filter(is_read=False).count()
 
-
-    # --- 2. Direct notifications ---
-    direct_qs = Notification.objects.filter(target_user_id=user.id)
-    print("DEBUG direct_qs IDs:", list(direct_qs.values_list("id", flat=True)))
-
-    direct_wrapped = [
-        UserNotification(
-            id=f"direct-{n.id}",
-            user=user,
-            notification=n,
-            is_read=n.is_read,
-            created_at=n.created_at,
-        )
-        for n in direct_qs
-    ]
-
-    # --- 3. Combine ---
-    all_notifications = list(linked_qs) + direct_wrapped
-
-    # --- 4. Sort ---
-    all_notifications.sort(key=lambda x: x.created_at, reverse=True)
-
-    # --- 5. Paginate ---
-    paginator = Paginator(all_notifications, 20)
-    page_number = request.GET.get("page")
-    page_obj = paginator.get_page(page_number)
-
-    # --- 6. Render partial template ---
-    return render(
-        request,
-        "employee/notifications.html",
-        {"notifications": page_obj.object_list, "page_obj": page_obj},
-    )
+    data = {
+        "unread_count": unread_count,
+        "notifications": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "message": n.message[:50],
+                "type": n.type,
+                "is_read": n.is_read,
+                "timesince": naturaltime(n.created_at),
+            }
+            for n in notifications
+        ]
+    }
+    return JsonResponse(data)

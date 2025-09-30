@@ -453,8 +453,7 @@ def cancel_order(request, order_id):
 def proceed_to_payment(request, order_id):
     """
     Entry point for the employee after order is validated.
-    - If payments:process_payment exists in your payments app we redirect with ?order_id=...
-    - Otherwise we render a simple confirmation page with a 'Pay now' button that posts to payments.
+    Shows the payment form page.
     """
     order = get_object_or_404(Order, id=order_id)
 
@@ -466,14 +465,8 @@ def proceed_to_payment(request, order_id):
         messages.error(request, "Order is not validated yet.")
         return redirect("orders:history")
 
-    # If you have a payments route named 'payments:process_payment' accept a redirect with order_id
-    try:
-        payments_url = reverse("payments:process_payment")
-        # Redirect user to the payments flow with order_id as query param
-        return redirect(f"{payments_url}?order_id={order.id}")
-    except Exception:
-        # If payments endpoint not present, render a simple page instructing next steps.
-        return render(request, "employee/proceed_to_payment.html", {"order": order})
+    # Redirect to the payment page (GET endpoint)
+    return redirect("payments:payment_page", order_id=order.id)
 
 @login_required
 def get_cart(request):

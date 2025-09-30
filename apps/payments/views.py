@@ -1786,3 +1786,17 @@ def send_order_paid_notification(order):
         
     except Exception as e:
         logger.error(f'Error sending order paid notification: {str(e)}')
+
+# Add to apps/payments/views.py
+
+@login_required
+def payment_page(request, order_id):
+    """Display payment page"""
+    order = get_object_or_404(Order, id=order_id, employee=request.user)
+    
+    if order.status not in ['validated', 'pending']:
+        messages.error(request, 'Order cannot be paid')
+        return redirect('orders:order_detail', order_id=order.id)
+    
+    context = {'order': order}
+    return render(request, 'orders/proceed_to_payment.html', context)

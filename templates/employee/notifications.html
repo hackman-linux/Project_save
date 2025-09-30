@@ -15,7 +15,7 @@
 <a class="nav-link" href="{% url 'employee:order_history' %}">
     <i class="bi bi-clock-history me-2"></i>Order History
 </a>
-<a class="nav-link active" href="{% url 'notifications:notifications_list' %}">
+<a class="nav-link active" href="{% url 'employee:notifications_list' %}">
     <i class="bi bi-bell me-2"></i>Notifications
     {% if unread_notifications > 0 %}
     <span class="badge bg-danger rounded-pill">{{ unread_notifications }}</span>
@@ -43,15 +43,6 @@
 {% endblock %}
 
 {% block content %}
-<!-- DEBUG SECTION - Remove after testing -->
-<div class="alert alert-info">
-    <h6>DEBUG INFO:</h6>
-    <p>Total notifications: {{ total_notifications }}</p>
-    <p>Notifications count: {{ notifications|length }}</p>
-    <p>User: {{ user.email }}</p>
-    <p>Unread: {{ unread_notifications }}</p>
-</div>
-
 <!-- Notification Statistics -->
 <div class="row mb-4">
     <div class="col-md-3">

@@ -6,6 +6,7 @@ app_name = 'payments'
 
 urlpatterns = [
     # Payment processing
+    path('order/<uuid:order_id>/pay/', views.payment_page, name='payment_page'),
     path('process/', views.process_payment, name='process_payment'),
     path('topup/', views.process_topup, name='process_topup'),
     path('verify/<uuid:payment_id>/', views.payment_verification, name='payment_verification'),

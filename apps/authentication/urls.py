@@ -31,8 +31,10 @@ employee_urlpatterns = [
     path('order-detail/<uuid:order_id>/', orders_views.order_detail, name='order_detail'),
     path('order-history/', orders_views.order_history, name='order_history'),
     # Changed from employee_notifications to notifications_list (the actual function that exists)
-    path('notifications/', views.notifications_list, name='notifications_list'),
+    path('notifications/', notifications_views.notifications_list, name='notifications_list'),
+    path("unread-count/", notifications_views.unread_count, name="unread_count"),
     path('profile/', views.profile_view, name='profile'),
+    path("notifications/api/", notifications_views.notifications_api, name="notifications_api"),
     path('settings/', views.settings_view, name='settings'),
     path('add-to-cart/', orders_views.add_to_cart, name='add_to_cart'),
     path('quick-order/', orders_views.quick_order, name='quick_order'),
