@@ -1,0 +1,82 @@
+{
+  "info": {
+    "name": "CamPay Payment Test",
+    "_postman_id": "123e4567-e89b-12d3-a456-426614174000",
+    "description": "Test collection for CamPay payment initiation and webhook",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Initiate CamPay Payment (JSON)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"order_id\": \"ad0210bd-d3e1-4ea1-8d25-60ef3762d6d2\",\n    \"payment_method\": \"campay_mtn\",\n    \"phone_number\": \"237699123456\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/payments/process/",
+          "protocol": "http",
+          "host": ["127","0","0","1"],
+          "port": "8000",
+          "path": ["payments","process"]
+        }
+      }
+    },
+    {
+      "name": "Initiate CamPay Payment (Form)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "order_id", "value": "ad0210bd-d3e1-4ea1-8d25-60ef3762d6d2"},
+            {"key": "payment_method", "value": "campay_mtn"},
+            {"key": "phone_number", "value": "237699123456"}
+          ]
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/payments/process/",
+          "protocol": "http",
+          "host": ["127","0","0","1"],
+          "port": "8000",
+          "path": ["payments","process"]
+        }
+      }
+    },
+    {
+      "name": "Simulate CamPay Webhook",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Campay-Signature",
+            "value": "your_test_signature_here"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"reference\": \"CMP123456\",\n    \"external_reference\": \"1\",\n    \"status\": \"completed\",\n    \"amount\": \"5000\",\n    \"operator\": \"MTN\",\n    \"from\": \"237699123456\",\n    \"created_at\": \"2025-10-01T21:30:00Z\",\n    \"updated_at\": \"2025-10-01T21:31:00Z\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/payments/webhooks/campay/",
+          "protocol": "http",
+          "host": ["127","0","0","1"],
+          "port": "8000",
+          "path": ["payments","webhooks","campay"]
+        }
+      }
+    }
+  ]
+}

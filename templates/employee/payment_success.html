@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Payment Successful ✅</h2>
+  <p>Your transaction was successful. You can now continue to your dashboard.</p>
+  <a href="{% url 'orders:order_list' %}">Back to Orders</a>
+{% endblock %}

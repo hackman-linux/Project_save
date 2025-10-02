@@ -44,6 +44,7 @@ DJANGO_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.sites",
 ]
 
 THIRD_PARTY_APPS = [
@@ -292,10 +293,10 @@ BASE_URL = os.environ.get('BASE_URL', 'http://localhost:8000')
 CAMPAY_CONFIG = {
     'API_KEY': config('CAMPAY_API_KEY', default=''),
     'SECRET_KEY': config('CAMPAY_SECRET_KEY', default=''),
-    'USERNAME': config('CAMPAY_USERNAME', default=''),
-    'PASSWORD': config('CAMPAY_PASSWORD', default=''),
+    'USERNAME': config('CAMPAY_USERNAME', default='hXPxt7b7wD8QRDln2kxhPPtBLEACZpwPSWAVE69eZK8wq-PJihs2BkwxCMUBQ8zCBeLBG5jSGgk1PCVqYR34fA'),
+    'PASSWORD': config('CAMPAY_PASSWORD', default='9Jn8RG0rymJ9vpNhd_wHmxpDvGgC6SCNNGFsK2I3XGe26qbHgTCZwC01PHFYd9gWXOlp6qr8trF7nbKK9lnnPw'),
     'BASE_URL': config('CAMPAY_BASE_URL', default='https://demo.campay.net'),  # Use https://api.campay.net for production
-    'WEBHOOK_URL': config('CAMPAY_WEBHOOK_URL', default=''),
+    'WEBHOOK_URL': config('CAMPAY_WEBHOOK_URL', default='I1152TjiH_fzXxkPzvzfp5Yj8f0S86I2kCM6cLe9I9g5rXbTA-Q2s_3rz0PYa2VUFpJICFaLJMtGQkqMBoZ-gw'),
     'ENVIRONMENT': config('CAMPAY_ENVIRONMENT', default='sandbox'),  # sandbox or live
 }
 
@@ -358,3 +359,5 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+SITE_ID = 1

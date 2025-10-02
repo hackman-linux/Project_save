@@ -906,21 +906,32 @@ def unread_count(request):
     return JsonResponse({"unread_count": unread})
 
 def notifications_api(request):
-    notifications = Notification.objects.filter(user=request.user).order_by('-created_at')[:10]
-    unread_count = notifications.filter(is_read=False).count()
+    # WRONG: Notification.objects.filter(user=request.user)
+    # CORRECT: Query through UserNotification junction table
+    
+    user_notifications = UserNotification.objects.filter(
+        user=request.user
+    ).select_related('notification').order_by('-created_at')[:10]
+    
+    unread_count = UserNotification.objects.filter(
+        user=request.user, 
+        is_read=False
+    ).count()
 
     data = {
         "unread_count": unread_count,
         "notifications": [
             {
-                "id": n.id,
-                "title": n.title,
-                "message": n.message[:50],
-                "type": n.type,
-                "is_read": n.is_read,
-                "timesince": naturaltime(n.created_at),
+                "id": str(un.id),
+                "title": un.notification.title,
+                "message": un.notification.message[:50],
+                "type": un.notification.notification_type,
+                "is_read": un.is_read,
+                "created_at": un.created_at.isoformat(),
+                "action_url": un.notification.action_url,
+                "action_text": un.notification.action_text,
             }
-            for n in notifications
+            for un in user_notifications
         ]
     }
     return JsonResponse(data)

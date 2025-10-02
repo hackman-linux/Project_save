@@ -1,9 +1,10 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Complete Payment - Order #ORD-12345</title>
+    <title>Complete Payment - Order #{{ order.order_number }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
@@ -151,12 +152,6 @@
             border-bottom: none;
         }
 
-        .badge-custom {
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            font-weight: 600;
-        }
-
         .security-badge {
             background: #f0fdf4;
             color: #15803d;
@@ -168,16 +163,6 @@
             margin-top: 1rem;
         }
 
-        .modal-content {
-            border-radius: 20px;
-            border: none;
-        }
-
-        .spinner-border-lg {
-            width: 4rem;
-            height: 4rem;
-        }
-
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -185,20 +170,6 @@
 
         .pulse {
             animation: pulse 2s ease-in-out infinite;
-        }
-
-        @media (max-width: 768px) {
-            body {
-                padding: 1rem 0;
-            }
-
-            .payment-container {
-                padding: 0 1rem;
-            }
-
-            .payment-method-option {
-                margin-bottom: 1rem;
-            }
         }
     </style>
 </head>
@@ -209,37 +180,25 @@
             <div class="card-header">
                 <div class="d-flex justify-content-between align-items-center">
                     <h4 class="mb-0"><i class="bi bi-receipt me-2"></i>Order Summary</h4>
-                    <span class="badge bg-light text-dark">#ORD-12345</span>
+                    <span class="badge bg-light text-dark">#{{ order.order_number }}</span>
                 </div>
             </div>
             <div class="card-body">
                 <div class="order-summary mb-3">
+                    {% for item in order.items.all %}
                     <div class="order-item">
                         <div>
-                            <strong>Grilled Chicken</strong>
-                            <small class="text-muted d-block">Quantity: 2</small>
+                            <strong>{{ item.menu_item.name }}</strong>
+                            <small class="text-muted d-block">Quantity: {{ item.quantity }}</small>
                         </div>
-                        <strong>4,500 XAF</strong>
+                        <strong>{{ item.total|floatformat:0 }} XAF</strong>
                     </div>
-                    <div class="order-item">
-                        <div>
-                            <strong>Fried Rice</strong>
-                            <small class="text-muted d-block">Quantity: 1</small>
-                        </div>
-                        <strong>1,500 XAF</strong>
-                    </div>
-                    <div class="order-item">
-                        <div>
-                            <strong>Fresh Juice</strong>
-                            <small class="text-muted d-block">Quantity: 2</small>
-                        </div>
-                        <strong>1,000 XAF</strong>
-                    </div>
+                    {% endfor %}
                 </div>
 
                 <div class="d-flex justify-content-between align-items-center p-3 bg-light rounded">
                     <h5 class="mb-0">Total Amount</h5>
-                    <h4 class="mb-0 text-primary">7,000 XAF</h4>
+                    <h4 class="mb-0 text-primary">{{ order.total_amount|floatformat:0 }} XAF</h4>
                 </div>
             </div>
         </div>
@@ -251,6 +210,8 @@
             </div>
             <div class="card-body">
                 <form id="paymentForm">
+                    {% csrf_token %}
+                    
                     <!-- Payment Methods -->
                     <div class="row mb-4">
                         <div class="col-md-6 mb-3 mb-md-0">
@@ -273,7 +234,7 @@
                                         <i class="bi bi-wallet2"></i>
                                     </div>
                                     <h5 class="mb-1">Wallet</h5>
-                                    <p class="text-muted mb-0 small">Balance: 25,000 XAF</p>
+                                    <p class="text-muted mb-0 small">Balance: {{ user.wallet_balance|floatformat:0 }} XAF</p>
                                 </label>
                             </div>
                         </div>
@@ -287,9 +248,11 @@
                             <input type="tel" 
                                    class="form-control" 
                                    id="phoneNumber" 
+                                   name="phone_number"
                                    placeholder="6XX XXX XXX"
                                    pattern="[6][0-9]{8}"
                                    maxlength="9"
+                                   value="{{ user.phone_number|default:'' }}"
                                    required>
                         </div>
                         <small class="text-muted">
@@ -308,7 +271,7 @@
                     <div class="d-grid gap-2 mt-4">
                         <button type="submit" class="btn btn-primary submit-btn">
                             <i class="bi bi-lock-fill me-2"></i>
-                            Pay 7,000 XAF
+                            Pay {{ order.total_amount|floatformat:0 }} XAF
                         </button>
                     </div>
                 </form>
@@ -325,8 +288,13 @@
                         <div class="spinner-border spinner-border-lg text-primary mb-3 pulse" role="status"></div>
                         <h4>Processing Payment...</h4>
                         <p class="text-muted">Please check your phone for payment approval</p>
-                        <small class="text-muted">Transaction ID: TXN-4567890</small>
+                        <small class="text-muted" id="transactionId"></small>
                     </div>
+
+                    <div id="payment-status" class="text-warning">
+                        Waiting for payment confirmation...
+                    </div>
+
 
                     <div id="successState" style="display: none;">
                         <div class="text-success mb-3">
@@ -334,7 +302,7 @@
                         </div>
                         <h4>Payment Successful!</h4>
                         <p class="text-muted">Your order has been confirmed</p>
-                        <button class="btn btn-primary mt-3" onclick="window.location.href='#'">
+                        <button class="btn btn-primary mt-3" onclick="window.location.href='{% url 'orders:order_detail' order.id %}'">
                             View Order
                         </button>
                     </div>
@@ -356,70 +324,170 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Payment method selection
-        document.querySelectorAll('.payment-method-option').forEach(option => {
-            option.addEventListener('click', function() {
-                document.querySelectorAll('.payment-method-option').forEach(opt => {
-                    opt.classList.remove('selected');
-                });
-                this.classList.add('selected');
-                this.querySelector('input[type="radio"]').checked = true;
+     // Replace the entire <script> section in proceed_to_payment.html with this:
 
-                // Show/hide phone section
-                const method = this.dataset.method;
-                const phoneSection = document.getElementById('phoneSection');
-                phoneSection.style.display = method === 'campay' ? 'block' : 'none';
-            });
+const orderId = '{{ order.id }}';
+const processPaymentUrl = '{% url "payments:process_payment" %}';
+
+// Payment method selection
+document.querySelectorAll('.payment-method-option').forEach(option => {
+    option.addEventListener('click', function() {
+        document.querySelectorAll('.payment-method-option').forEach(opt => {
+            opt.classList.remove('selected');
+        });
+        this.classList.add('selected');
+        this.querySelector('input[type="radio"]').checked = true;
+
+        const method = this.dataset.method;
+        const phoneSection = document.getElementById('phoneSection');
+        const phoneInput = document.getElementById('phoneNumber');
+        
+        if (method === 'campay') {
+            phoneSection.style.display = 'block';
+            phoneInput.required = true;
+        } else {
+            phoneSection.style.display = 'none';
+            phoneInput.required = false;
+        }
+    });
+});
+
+// Form submission
+document.getElementById('paymentForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const submitBtn = e.target.querySelector('.submit-btn');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+
+    const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
+    const phoneNumber = document.getElementById('phoneNumber').value;
+
+    const formData = {
+        order_id: orderId,
+        payment_method: paymentMethod,
+        phone_number: paymentMethod === 'campay' ? phoneNumber : ''
+    };
+
+    const modal = new bootstrap.Modal(document.getElementById('paymentModal'));
+    modal.show();
+
+    try {
+        const response = await fetch(processPaymentUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            },
+            body: JSON.stringify(formData)
         });
 
-        // Form submission
-        document.getElementById('paymentForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
+        const data = await response.json();
+        console.log('Payment response:', data);
 
-            const submitBtn = e.target.querySelector('.submit-btn');
-            const originalText = submitBtn.innerHTML;
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
-
-            const formData = {
-                order_id: 'ORDER_ID_HERE',
-                payment_method: document.querySelector('input[name="payment_method"]:checked').value,
-                phone_number: document.getElementById('phoneNumber').value
-            };
-
-            // Show modal
-            const modal = new bootstrap.Modal(document.getElementById('paymentModal'));
-            modal.show();
-
-            try {
-                // Simulate API call
-                await new Promise(resolve => setTimeout(resolve, 3000));
-
-                // Simulate success (replace with actual API call)
-                const success = Math.random() > 0.3;
-
-                if (success) {
-                    document.getElementById('processingState').style.display = 'none';
-                    document.getElementById('successState').style.display = 'block';
-                } else {
-                    document.getElementById('processingState').style.display = 'none';
-                    document.getElementById('failureState').style.display = 'block';
-                    document.getElementById('errorMessage').textContent = 'Payment was declined. Please try again.';
-                }
-            } catch (error) {
-                document.getElementById('processingState').style.display = 'none';
-                document.getElementById('failureState').style.display = 'block';
-                document.getElementById('errorMessage').textContent = 'An error occurred. Please try again.';
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = originalText;
+        if (data.success) {
+            document.getElementById('transactionId').textContent = `Transaction ID: ${data.transaction_id}`;
+            
+            if (data.requires_approval) {
+                // Poll for payment status - FIXED: Use payment_id from response
+                pollPaymentStatus(data.payment_id);
+            } else {
+                // Payment completed immediately (wallet)
+                showSuccess();
             }
-        });
+        } else {
+            showError(data.message || 'Payment failed');
+        }
+    } catch (error) {
+        console.error('Payment error:', error);
+        showError('An error occurred. Please try again.');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+    }
+});
 
-        // Phone number formatting
-        document.getElementById('phoneNumber').addEventListener('input', function(e) {
-            this.value = this.value.replace(/[^0-9]/g, '');
-        });
+// Poll payment status - FIXED: Now properly uses paymentId
+async function pollPaymentStatus(paymentId) {
+    console.log('Starting to poll payment status for:', paymentId);
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes (5 second intervals)
+
+    const pollInterval = setInterval(async () => {
+        attempts++;
+        console.log(`Checking payment status (attempt ${attempts})...`);
+
+        try {
+            // FIXED: Properly construct URL with payment ID
+            const verifyUrl = `/payments/verify/${paymentId}/`;
+            const response = await fetch(verifyUrl);
+            const data = await response.json();
+            
+            console.log('Verification response:', data);
+
+            if (data.status === 'completed') {
+                clearInterval(pollInterval);
+                console.log('Payment completed!');
+                showSuccess();
+            } else if (data.status === 'failed') {
+                clearInterval(pollInterval);
+                console.log('Payment failed:', data.message);
+                showError(data.message || 'Payment failed');
+            } else if (attempts >= maxAttempts) {
+                clearInterval(pollInterval);
+                console.log('Payment verification timeout');
+                showError('Payment verification timeout. Please check your order history.');
+            } else {
+                // Update status message
+                const statusElement = document.getElementById('payment-status');
+                if (statusElement) {
+                    statusElement.textContent = data.message || 'Waiting for confirmation...';
+                }
+            }
+        } catch (error) {
+            console.error('Verification error:', error);
+            // Don't stop polling on network errors, just log them
+        }
+    }, 5000); // Check every 5 seconds
+}
+
+function showSuccess() {
+    document.getElementById('processingState').style.display = 'none';
+    document.getElementById('successState').style.display = 'block';
+    
+    // Optional: Auto-redirect after 3 seconds
+    setTimeout(() => {
+        window.location.href = '{% url "orders:order_detail" order.id %}';
+    }, 3000);
+}
+
+function showError(message) {
+    document.getElementById('processingState').style.display = 'none';
+    document.getElementById('failureState').style.display = 'block';
+    document.getElementById('errorMessage').textContent = message;
+}
+
+// Phone number formatting
+document.getElementById('phoneNumber').addEventListener('input', function(e) {
+    this.value = this.value.replace(/[^0-9]/g, '');
+});
+
+// Helper function to get CSRF token
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
     </script>
 </body>
 </html>
