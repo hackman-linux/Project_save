@@ -15,8 +15,9 @@ urlpatterns = [
     
     # Wallet top-up
     path('topup/', views.process_topup, name='process_topup'),
-    path("success/<uuid:payment_id>/", views.payment_success, name="payment_success"),
+    path("success/", views.payment_success, name="payment_success"),
     
     # Webhooks
     path('webhook/campay/', views.campay_webhook, name='campay_webhook'),
+    
 ]

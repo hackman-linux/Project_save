@@ -8,6 +8,10 @@ from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from decimal import Decimal
+from django.views.decorators.http import require_POST
+import requests
+from django.conf import settings
+# CAMPAY_BASE_URL = settings.CAMPAY_BASE_URL
 import json
 import uuid
 import logging
@@ -18,6 +22,9 @@ from .models import Payment, WalletTransaction, PaymentWebhook
 from .services.campay_services import campay_service, CamPayError
 
 logger = logging.getLogger(__name__)
+
+CAMPAY_BASE_URL = "https://demo.campay.net/api"
+
 
 
 @login_required
@@ -39,115 +46,184 @@ def payment_page(request, order_id):
     return render(request, 'employee/proceed_to_payment.html', context)
 
 
+# apps/payments/views.py - Replace the entire function
+
 @login_required
+@require_POST
 def process_payment(request):
-    """Process a payment via CamPay"""
+    """Process payment for an order safely handling duplicates"""
     try:
-        payment_id = request.POST.get("payment_id")
-        payment = get_object_or_404(Payment, id=payment_id, user=request.user)
+        # Parse request body
+        data = json.loads(request.body) if request.body else request.POST
 
-        if payment.payment_method == "campay":
-            token = get_campay_token()
-            response = requests.post(
-                f"{CAMPAY_BASE_URL}/collect/",
-                headers={"Authorization": f"Token {token}"},
-                json={
-                    "amount": str(payment.amount),
-                    "currency": "XAF",
-                    "from": payment.phone_number,
-                    "description": f"Payment {payment.id}"
-                }
+        # Get parameters
+        order_id = data.get('order_id') or request.POST.get('order_id')
+        phone_number = data.get('phone_number') or request.POST.get('phone_number')
+        payment_method = data.get('payment_method') or request.POST.get('payment_method', 'campay_mtn')
+
+        logger.info(f"Processing payment - Order: {order_id}, Method: {payment_method}, Phone: {phone_number}")
+
+        if not order_id:
+            return JsonResponse({'success': False, 'error': 'Order ID is required'}, status=400)
+        if not phone_number:
+            return JsonResponse({'success': False, 'error': 'Phone number is required'}, status=400)
+
+        # Get order
+        order = get_object_or_404(Order, id=order_id, employee=request.user)
+
+        # Check if order can be paid
+        if order.status not in [Order.STATUS_VALIDATED, Order.STATUS_PENDING]:
+            return JsonResponse({
+                'success': False,
+                'error': f'Order cannot be paid. Current status: {order.get_status_display()}'
+            }, status=400)
+
+        # Try to fetch the latest pending or processing payment
+        payment = Payment.objects.filter(
+            order=order,
+            user=request.user,
+            status__in=['pending', 'processing']
+        ).order_by('-created_at').first()
+
+        if not payment:
+            # Create a new payment if none exists
+            payment = Payment.objects.create(
+                order=order,
+                user=request.user,
+                payment_reference=f"PAY_{uuid.uuid4().hex[:12].upper()}",
+                payment_method=payment_method,
+                transaction_type='order_payment',
+                amount=order.total_amount,
+                phone_number=phone_number,
+                description=f'Payment for order #{order.order_number}'
             )
-
-            try:
-                data = response.json()
-            except Exception:
-                data = {"message": "Invalid JSON response from CamPay", "raw": response.text}
-
-            if response.status_code == 200 and data.get("reference"):
-                payment.transaction_id = data["reference"]
-                payment.status = "processing"
-                payment.save()
-                return JsonResponse({"status": "processing", "reference": data["reference"]})
-            else:
-                # Save detailed failure reason
-                payment.status = "failed"
-                payment.failure_reason = data.get("message", "Unknown error")
-                payment.save()
-
-                logger.error(f"CamPay initiation failed: {data}")
+            created = True
+        else:
+            created = False
+            # Prevent re-processing if already completed
+            if payment.status == 'completed':
                 return JsonResponse({
-                    "status": "failed",
-                    "error": data
+                    'success': False,
+                    'error': 'This order has already been paid'
                 }, status=400)
 
-        return JsonResponse({"error": "Invalid payment method"}, status=400)
+        # Process payment based on method
+        if payment_method in ['campay_mtn', 'campay_orange', 'campay']:
+            result = process_campay_payment(payment)
+        elif payment_method == 'wallet':
+            result = process_wallet_payment(payment)
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': f'Payment method {payment_method} not supported'
+            }, status=400)
 
+        if result['success']:
+            return JsonResponse({
+                'success': True,
+                'message': result.get('message', 'Payment initiated successfully'),
+                'payment_id': str(payment.id),
+                'transaction_id': result.get('transaction_id', ''),
+                'ussd_code': result.get('ussd_code', ''),  # Add this line
+                'requires_approval': result.get('requires_approval', True),
+                'redirect_url': f'/payments/verification/{payment.id}/'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': result.get('message', 'Payment processing failed')
+            }, status=400)
+
+    except Order.DoesNotExist:
+        logger.error(f"Order not found: {order_id}")
+        return JsonResponse({'success': False, 'error': 'Order not found'}, status=404)
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in request body")
+        return JsonResponse({'success': False, 'error': 'Invalid request data'}, status=400)
     except Exception as e:
-        logger.error(f"Payment process error: {str(e)}")
-        return JsonResponse({
-            "status": "error",
-            "message": "Unable to process payment"
-        }, status=500)
+        logger.error(f"Payment processing error: {str(e)}", exc_info=True)
+        return JsonResponse({'success': False, 'error': 'An error occurred while processing your payment'}, status=500)
 
+
+# Replace your process_campay_payment function in views.py with this:
 
 def process_campay_payment(payment):
     """Process CamPay payment using the service"""
     try:
         payment.mark_as_processing()
-        logger.info(f"Processing CamPay payment {payment.id}")
+        logger.info(f"Processing CamPay payment {payment.id} for order {payment.order.order_number}")
         
         # Format phone number
-        phone_number = payment.phone_number
-        if not phone_number.startswith('237'):
-            phone_number = campay_service.format_phone_number(phone_number)
-        
+        phone_number = campay_service.format_phone_number(payment.phone_number)
         logger.info(f"Formatted phone number: {phone_number}")
         
+        # Determine payment method
         payment_method = 'campay_mtn'  # Default to MTN
-        success, result = campay_service.initiate_payment(
+        if 'orange' in payment.payment_method.lower():
+            payment_method = 'campay_orange'
+        
+        # Initiate payment with CamPay
+        result = campay_service.initiate_payment(
             order=payment.order,
             phone_number=phone_number,
             payment_method=payment_method
         )
         
-        if success:
+        logger.info(f"CamPay initiation result: {result}")
+        
+        if result.get('success'):
+            data = result.get('data', {})
+            
             # Update payment with transaction details
-            payment.transaction_id = result.get('transaction_id')
-            payment.external_reference = result.get('external_reference', str(payment.order.id))
-            payment.provider_response = result
+            payment.transaction_id = data.get('transaction_id')
+            payment.external_reference = data.get('external_reference', str(payment.order.id))
+            payment.provider_response = data
+            
+            # Get USSD code if available
+            ussd_code = data.get('ussd_code', '')
+            
+            # Save payment
             payment.save()
             
-            logger.info(f"CamPay payment initiated: {payment.transaction_id}")
+            logger.info(f"CamPay payment initiated successfully: {payment.transaction_id}")
+            
+            # Create user-friendly message
+            message = data.get('message', 'Payment request sent.')
+            if ussd_code:
+                message = f"Please check your phone for a payment request. If you don't receive it, dial {ussd_code} to complete the payment."
+            else:
+                message = "Please check your phone and approve the payment request to complete your order."
             
             return {
                 'success': True,
-                'message': result.get('message') or 'Payment request sent. Check your phone.',
+                'message': message,
                 'transaction_id': payment.transaction_id,
+                'ussd_code': ussd_code,
                 'requires_approval': True
             }
         else:
             error_msg = result.get('error', 'Payment initiation failed')
             logger.error(f"CamPay initiation failed: {error_msg}")
             payment.mark_as_failed(error_msg)
+            
             return {
                 'success': False,
                 'message': error_msg
             }
             
     except CamPayError as e:
-        logger.error(f'CamPay error: {str(e)}')
+        logger.error(f'CamPay error: {str(e)}', exc_info=True)
         payment.mark_as_failed(str(e))
         return {
             'success': False,
-            'message': str(e)
+            'message': f'Payment service error: {str(e)}'
         }
     except Exception as e:
         logger.error(f'Payment processing error: {str(e)}', exc_info=True)
         payment.mark_as_failed(str(e))
         return {
             'success': False,
-            'message': 'Payment processing failed'
+            'message': 'Payment processing failed. Please try again.'
         }
 
 
@@ -216,49 +292,65 @@ def payment_verification(request, payment_id):
         logger.info(f"Verifying payment status for: {payment_id}")
         payment = get_object_or_404(Payment, id=payment_id, user=request.user)
         
-        # Completed or failed
+        # Already completed
         if payment.status == 'completed':
-            logger.info(f"Payment {payment_id} is completed")
             return JsonResponse({
-                'status': 'completed',
-                'message': 'Payment completed successfully'
-            })
-        elif payment.status == 'failed':
-            logger.info(f"Payment {payment_id} has failed")
-            return JsonResponse({
-                'status': 'failed',
-                'message': payment.failure_reason or 'Payment failed'
+                "status": "completed",
+                "message": "Payment completed successfully",
+                "requires_approval": False
             })
 
-        # Pending or processing - check with CamPay
-        elif payment.status in ['processing', 'pending']:
-            if payment.payment_method == 'campay' and payment.transaction_id:
-                logger.info(f"Checking CamPay status for transaction: {payment.transaction_id}")
-                result = verify_campay_payment(payment)
+        # Already failed
+        if payment.status == 'failed':
+            return JsonResponse({
+                "status": "failed",
+                "message": payment.failure_reason or "Payment failed",
+                "requires_approval": False
+            })
 
-                return JsonResponse({
-                    'status': result.get('status', 'pending'),
-                    'message': result.get('message', 'Awaiting confirmation'),
-                    'requires_approval': result.get('requires_approval', True)
-                })
-        
-        # Default response
+        # Pending / Processing → re-check with CamPay
+        if payment.status in ["processing", "pending"]:
+            if payment.payment_method == "campay" and payment.transaction_id:
+                result = campay_service.check_payment_status(payment.transaction_id)
+
+                if result.get("success"):
+                    data = result["data"]
+                    status = data.get("status", "pending")
+
+                    # Update local record
+                    payment.status = status.lower()
+                    payment.save()
+
+                    return JsonResponse({
+                        "status": status.lower(),
+                        "message": f"Payment is {status.lower()}",
+                        "requires_approval": (status.upper() == "PENDING")
+                    })
+                else:
+                    # Could not verify at CamPay
+                    return JsonResponse({
+                        "status": "pending",
+                        "message": result.get("error", "Awaiting confirmation"),
+                        "requires_approval": True
+                    })
+
+        # Default fallback
         return JsonResponse({
-            'status': payment.status,
-            'message': 'Payment is being processed',
-            'requires_approval': True
+            "status": payment.status,
+            "message": "Payment is being processed",
+            "requires_approval": True
         })
-        
+
     except Exception as e:
-        logger.error(f'Payment verification error: {str(e)}', exc_info=True)
+        logger.error(f"Payment verification error: {str(e)}", exc_info=True)
         return JsonResponse({
-            'status': 'error',
-            'message': 'Unable to verify payment status'
+            "status": "error",
+            "message": "Unable to verify payment status"
         }, status=500)
 
 
 def verify_campay_payment(payment):
-    """Check CamPay payment status"""
+    """Check CamPay payment status using the service"""
     try:
         success, result = campay_service.check_payment_status(payment.transaction_id)
         
@@ -273,20 +365,11 @@ def verify_campay_payment(payment):
         logger.info(f"CamPay status for {payment.transaction_id}: {status}")
         
         if status == 'SUCCESSFUL':
-            # Update payment
-            payment.provider_response = result
-            payment.save()
-            
-            # Handle successful payment
-            if payment.transaction_type == 'wallet_topup':
-                complete_wallet_topup(payment)
-            elif payment.order:
+            payment.mark_as_completed()
+            if payment.order:
                 payment.order.status = Order.STATUS_PAID
                 payment.order.paid_at = timezone.now()
                 payment.order.save()
-                logger.info(f"Order {payment.order.order_number} marked as PAID")
-            
-            payment.mark_as_completed()
             
             return {
                 'status': 'completed',
@@ -296,7 +379,6 @@ def verify_campay_payment(payment):
         elif status in ['FAILED', 'CANCELLED']:
             failure_reason = result.get('reason', 'Payment failed')
             payment.mark_as_failed(failure_reason)
-            logger.warning(f"Payment {payment.id} failed: {failure_reason}")
             
             return {
                 'status': 'failed',
@@ -314,7 +396,6 @@ def verify_campay_payment(payment):
             'status': 'processing',
             'message': 'Unable to verify payment status'
         }
-
 
 @csrf_exempt
 @require_http_methods(["POST"])

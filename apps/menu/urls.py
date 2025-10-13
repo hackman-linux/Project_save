@@ -25,12 +25,13 @@ urlpatterns = [
     path('inventory/', views.inventory_management, name='inventory'),
     path('statistics/', views.MenuStatisticsView.as_view(), name='statistics'),
     # path('management/', MenuManagementView.as_view(), name='menu_management'),
-    path('item/<uuid:item_id>/edit/', views.update_menu_item, name='edit_item'),
+    # path('item/<uuid:item_id>/edit/', views.update_menu_item, name='edit_item'),
     path('category/add/', views.create_menu_category, name='add_category'),
+    path('item/<uuid:item_id>/get/', views.get_menu_item_for_edit, name='get_menu_item'),
     
     # Admin Actions
     path('add-item/', views.add_menu_item, name='add_item'),
-    path('item/<uuid:item_id>/update/', views.update_menu_item, name='update_item'),
+    # path('item/<uuid:item_id>/update/', views.update_menu_item, name='update_item'),
     path('item/<uuid:item_id>/delete/', views.delete_menu_item, name='delete_item'),
     path('item/<uuid:item_id>/toggle-availability/', views.toggle_item_availability, name='toggle_availability'),
     path('item/<uuid:item_id>/update-status/', views.update_status, name='update_status'),

@@ -213,58 +213,38 @@ def menu_management(request):
 
 @login_required
 def add_menu_item(request):
-    """Add new menu item with detailed error logging"""
-    print(f"Request method: {request.method}")
-    print(f"User: {request.user}")
-    print(f"Is canteen admin: {request.user.is_canteen_admin()}")
-    
+    """Add new menu item - handles both form and AJAX"""
     if not request.user.is_canteen_admin():
-        print("User is not canteen admin")
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
     
     if request.method == 'POST':
         try:
-            print(f"POST data: {request.POST}")
-            print(f"FILES: {request.FILES}")
-            
-            # Basic validation
-            required_fields = ['name', 'price', 'category']
-            for field in required_fields:
-                if not request.POST.get(field):
-                    return JsonResponse({'error': f'{field} is required'}, status=400)
-            
             # Get category
             category_id = request.POST.get('category')
-            print(f"Category ID: {category_id}")
+            if not category_id:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Category is required'
+                }, status=400)
             
-            try:
-                category = MenuCategory.objects.get(id=category_id)
-                print(f"Found category: {category.name}")
-            except MenuCategory.DoesNotExist:
-                return JsonResponse({'error': 'Invalid category selected'}, status=400)
+            category = get_object_or_404(MenuCategory, id=category_id)
             
             # Create menu item
-            menu_item_data = {
-                'category': category,
-                'name': request.POST['name'],
-                'description': request.POST.get('description', ''),
-                'price': Decimal(str(request.POST['price'])),
-                'preparation_time': int(request.POST.get('prep_time', 15)),
-                'current_stock': int(request.POST.get('current_stock', 100)),
-                'spice_level': request.POST.get('spice_level', 'none'),
-                'is_available': 'is_available' in request.POST,
-                'created_by': request.user
-            }
+            menu_item = MenuItem.objects.create(
+                category=category,
+                name=request.POST['name'],
+                description=request.POST.get('description', ''),
+                price=Decimal(str(request.POST['price'])),
+                preparation_time=int(request.POST.get('prep_time', 15)),
+                current_stock=int(request.POST.get('current_stock', 100)),
+                is_available='is_available' in request.POST,
+                created_by=request.user
+            )
             
-            print(f"Creating menu item with data: {menu_item_data}")
-            
-            menu_item = MenuItem.objects.create(**menu_item_data)
-            
-            # Handle image upload
+            # Handle image
             if 'image' in request.FILES:
                 menu_item.image = request.FILES['image']
                 menu_item.save()
-                print("Image uploaded successfully")
             
             # Handle dietary tags
             dietary_tags = []
@@ -276,24 +256,31 @@ def add_menu_item(request):
             if dietary_tags:
                 menu_item.dietary_tags = dietary_tags
                 menu_item.save()
-                print(f"Dietary tags set: {dietary_tags}")
-            
-            print(f"Menu item created successfully: {menu_item.id}")
             
             return JsonResponse({
                 'success': True,
-                'message': 'Menu item added successfully',
-                'item_id': str(menu_item.id),
-                'item_name': menu_item.name
+                'message': f'Menu item "{menu_item.name}" added successfully',
+                'item': {
+                    'id': str(menu_item.id),
+                    'name': menu_item.name,
+                    'price': float(menu_item.price),
+                    'category': menu_item.category.name
+                }
             })
             
+        except KeyError as e:
+            return JsonResponse({
+                'success': False,
+                'error': f'Missing required field: {str(e)}'
+            }, status=400)
         except Exception as e:
-            print(f"Error creating menu item: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return JsonResponse({'error': f'Error adding menu item: {str(e)}'}, status=400)
+            logger.error(f"Error adding menu item: {str(e)}", exc_info=True)
+            return JsonResponse({
+                'success': False,
+                'error': f'Error: {str(e)}'
+            }, status=500)
     
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 
 @login_required
@@ -571,82 +558,86 @@ def create_menu_category(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@login_required
-def update_menu_item(request, item_id):
-    """Update an existing menu item"""
-    if not request.user.is_canteen_admin():
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
+# @login_required
+# def update_menu_item(request, item_id):
+#     """Update an existing menu item"""
+#     if not request.user.is_canteen_admin():
+#         return JsonResponse({'error': 'Unauthorized'}, status=403)
     
-    if request.method == 'POST':
-        try:
-            menu_item = get_object_or_404(MenuItem, id=item_id)
-            data = json.loads(request.body)
+#     if request.method == 'POST':
+#         try:
+#             menu_item = get_object_or_404(MenuItem, id=item_id)
+#             data = json.loads(request.body)
             
-            # Update fields
-            menu_item.name = data.get('name', menu_item.name)
-            menu_item.description = data.get('description', menu_item.description)
-            menu_item.price = Decimal(data.get('price', menu_item.price))
-            menu_item.preparation_time = int(data.get('preparation_time', menu_item.preparation_time))
-            menu_item.spice_level = data.get('spice_level', menu_item.spice_level)
-            menu_item.is_available = data.get('is_available', menu_item.is_available)
-            menu_item.is_featured = data.get('is_featured', menu_item.is_featured)
+#             # Update fields
+#             menu_item.name = data.get('name', menu_item.name)
+#             menu_item.description = data.get('description', menu_item.description)
+#             menu_item.price = Decimal(data.get('price', menu_item.price))
+#             menu_item.preparation_time = int(data.get('preparation_time', menu_item.preparation_time))
+#             menu_item.spice_level = data.get('spice_level', menu_item.spice_level)
+#             menu_item.is_available = data.get('is_available', menu_item.is_available)
+#             menu_item.is_featured = data.get('is_featured', menu_item.is_featured)
             
-            # Update dietary tags if provided
-            if 'dietary_tags' in data:
-                menu_item.dietary_tags = data['dietary_tags']
+#             # Update dietary tags if provided
+#             if 'dietary_tags' in data:
+#                 menu_item.dietary_tags = data['dietary_tags']
             
-            menu_item.save()
+#             menu_item.save()
             
-            return JsonResponse({
-                'success': True,
-                'message': 'Menu item updated successfully',
-                'item_name': menu_item.name
-            })
+#             return JsonResponse({
+#                 'success': True,
+#                 'message': 'Menu item updated successfully',
+#                 'item_name': menu_item.name
+#             })
             
-        except Exception as e:
-            return JsonResponse({
-                'error': f'Error updating menu item: {str(e)}'
-            }, status=400)
+#         except Exception as e:
+#             return JsonResponse({
+#                 'error': f'Error updating menu item: {str(e)}'
+#             }, status=400)
     
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
+#     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
 @login_required
 def delete_menu_item(request, item_id):
-    """Delete a menu item"""
+    """Delete menu item"""
     if not request.user.is_canteen_admin():
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
     
-    if request.method == 'DELETE':
+    # Accept both DELETE and POST methods
+    if request.method in ['DELETE', 'POST']:
         try:
             menu_item = get_object_or_404(MenuItem, id=item_id)
             item_name = menu_item.name
             
-            # Check if item has been ordered
+            # Check if item has orders
+            from apps.orders.models import OrderItem
             has_orders = OrderItem.objects.filter(menu_item=menu_item).exists()
             
             if has_orders:
                 # Don't delete, just deactivate
                 menu_item.is_available = False
                 menu_item.save()
-                message = f'Menu item "{item_name}" has been deactivated'
+                return JsonResponse({
+                    'success': True,
+                    'message': f'"{item_name}" deactivated (has order history)',
+                    'deactivated': True
+                })
             else:
                 # Safe to delete
                 menu_item.delete()
-                message = f'Menu item "{item_name}" has been deleted'
-            
-            return JsonResponse({
-                'success': True,
-                'message': message
-            })
-            
+                return JsonResponse({
+                    'success': True,
+                    'message': f'"{item_name}" deleted successfully',
+                    'deleted': True
+                })
         except Exception as e:
             return JsonResponse({
-                'error': f'Error deleting menu item: {str(e)}'
+                'success': False,
+                'error': str(e)
             }, status=400)
     
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 @login_required
 def menu_item_reviews(request, item_id):
@@ -874,79 +865,177 @@ class MenuStatisticsView(TemplateView):
 
         return context
 
-@require_POST
+@login_required
 def bulk_make_available(request):
-    """Mark selected menu items as available"""
-    item_ids = request.POST.getlist("items")
-    if item_ids:
-        MenuItem.objects.filter(id__in=item_ids).update(is_available=True)
-        messages.success(request, f"{len(item_ids)} items marked as available.")
-    return redirect("menu:menu_management")
+    """Bulk set items as available"""
+    if not request.user.is_canteen_admin():
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
+    
+    if request.method == 'POST':
+        try:
+            # Handle different parameter formats
+            item_ids = (
+                request.POST.getlist('items[]') or 
+                request.POST.getlist('items') or
+                json.loads(request.body).get('items', []) if request.body else []
+            )
+            
+            if not item_ids:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No items selected'
+                }, status=400)
+            
+            updated = MenuItem.objects.filter(id__in=item_ids).update(is_available=True)
+            
+            return JsonResponse({
+                'success': True,
+                'message': f'{updated} items marked as available'
+            })
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=500)
+    
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 
-@require_POST
+@login_required
 def bulk_make_unavailable(request):
-    """Mark selected menu items as unavailable"""
-    item_ids = request.POST.getlist("items")
-    if item_ids:
-        MenuItem.objects.filter(id__in=item_ids).update(is_available=False)
-        messages.success(request, f"{len(item_ids)} items marked as unavailable.")
-    return redirect("menu:menu_management")
+    """Bulk set items as unavailable"""
+    if not request.user.is_canteen_admin():
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
+    
+    if request.method == 'POST':
+        try:
+            item_ids = (
+                request.POST.getlist('items[]') or 
+                request.POST.getlist('items') or
+                json.loads(request.body).get('items', []) if request.body else []
+            )
+            
+            if not item_ids:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No items selected'
+                }, status=400)
+            
+            updated = MenuItem.objects.filter(id__in=item_ids).update(is_available=False)
+            
+            return JsonResponse({
+                'success': True,
+                'message': f'{updated} items marked as unavailable'
+            })
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=500)
+    
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 
-@require_POST
+@login_required
 def bulk_change_category(request):
-    """Change category for multiple items"""
-    item_ids = request.POST.getlist("items")
-    new_category_id = request.POST.get("category_id")
-    if item_ids and new_category_id:
-        MenuItem.objects.filter(id__in=item_ids).update(category_id=new_category_id)
-        messages.success(request, f"Category changed for {len(item_ids)} items.")
-    return redirect("menu:menu_management")
+    """Bulk change category"""
+    if not request.user.is_canteen_admin():
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
+    
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body) if request.body else request.POST
+            item_ids = data.getlist('items[]') if hasattr(data, 'getlist') else data.get('items', [])
+            category_id = request.POST.get('category') or data.get('category_id')
+            
+            if not item_ids:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No items selected'
+                }, status=400)
+            
+            if not category_id:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No category selected'
+                }, status=400)
+            
+            category = get_object_or_404(MenuCategory, id=category_id)
+            updated = MenuItem.objects.filter(id__in=item_ids).update(category=category)
+            
+            return JsonResponse({
+                'success': True,
+                'message': f'{updated} items moved to "{category.name}"'
+            })
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=500)
+    
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
-@require_POST
+
+@login_required
 def bulk_delete(request):
-    """Bulk delete selected menu items"""
-    item_ids = request.POST.getlist("item_ids[]")  # JS sends as array
-
-    if not item_ids:
-        return JsonResponse({"success": False, "message": "No items selected."}, status=400)
-
-    deleted_count, _ = MenuItem.objects.filter(id__in=item_ids).delete()
-
-    return JsonResponse({"success": True, "deleted_count": deleted_count})
-
-# Add these functions to your views.py file
+    """Bulk delete items"""
+    if not request.user.is_canteen_admin():
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
+    
+    if request.method == 'POST':
+        try:
+            item_ids = (
+                request.POST.getlist('items[]') or 
+                request.POST.getlist('items') or
+                json.loads(request.body).get('items', []) if request.body else []
+            )
+            
+            if not item_ids:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No items selected'
+                }, status=400)
+            
+            deleted_count, _ = MenuItem.objects.filter(id__in=item_ids).delete()
+            
+            return JsonResponse({
+                'success': True,
+                'message': f'{deleted_count} items deleted successfully',
+                'deleted_count': deleted_count
+            })
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=500)
+    
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 @login_required
 def toggle_item_availability(request, item_id):
-    """Toggle availability status of a menu item via AJAX"""
+    """Toggle item availability via AJAX"""
     if not request.user.is_canteen_admin():
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=403)
     
     if request.method == 'POST':
         try:
             menu_item = get_object_or_404(MenuItem, id=item_id)
-            
-            # Toggle availability
             menu_item.is_available = not menu_item.is_available
             menu_item.save()
             
-            status_text = "available" if menu_item.is_available else "unavailable"
-            message = f"{menu_item.name} marked as {status_text}."
-            
             return JsonResponse({
                 'success': True,
-                'message': message,
-                'is_available': menu_item.is_available
+                'message': f'{menu_item.name} is now {"available" if menu_item.is_available else "unavailable"}',
+                'is_available': menu_item.is_available,
+                'item_name': menu_item.name
             })
-            
         except Exception as e:
             return JsonResponse({
-                'error': f'Error updating availability: {str(e)}'
+                'success': False,
+                'error': str(e)
             }, status=400)
     
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
+    return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
 
 
 @login_required 
@@ -1123,3 +1212,31 @@ def debug_add_item(request):
         })
     
     return JsonResponse({'error': 'Only POST allowed'}, status=405)
+
+@login_required
+def get_menu_item_for_edit(request, item_id):
+    """Get menu item data for edit modal"""
+    if not request.user.is_canteen_admin():
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+    
+    try:
+        menu_item = get_object_or_404(MenuItem, id=item_id)
+        
+        return JsonResponse({
+            'success': True,
+            'item': {
+                'id': str(menu_item.id),
+                'name': menu_item.name,
+                'description': menu_item.description,
+                'price': float(menu_item.price),
+                'category': str(menu_item.category.id),
+                'prep_time': menu_item.preparation_time,
+                'current_stock': menu_item.current_stock,
+                'is_vegetarian': 'vegetarian' in (menu_item.dietary_tags or []),
+                'is_spicy': 'spicy' in (menu_item.dietary_tags or []),
+                'is_available': menu_item.is_available,
+                'image_url': menu_item.image.url if menu_item.image else None
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)

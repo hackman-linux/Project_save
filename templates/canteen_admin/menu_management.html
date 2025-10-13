@@ -878,7 +878,45 @@ class MenuManagement {
 
 // Global functions for onclick events
 function editItem(itemId) {
-    menuManagement.editItem(itemId);
+    if (window.menuManagement) {
+        showLoading('Loading item details...');
+        
+        fetch(`/menu/item/${itemId}/get/`, {
+            method: 'GET',
+            headers: {
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            if (data.success) {
+                // Populate edit form
+                const form = document.getElementById('editItemForm');
+                document.getElementById('editItemId').value = data.item.id;
+                document.getElementById('editItemName').value = data.item.name;
+                document.getElementById('editItemDescription').value = data.item.description;
+                document.getElementById('editItemPrice').value = data.item.price;
+                document.getElementById('editItemCategory').value = data.item.category;
+                document.getElementById('editItemPrepTime').value = data.item.prep_time;
+                document.getElementById('editItemStock').value = data.item.current_stock;
+                document.getElementById('editItemVegetarian').checked = data.item.is_vegetarian;
+                document.getElementById('editItemSpicy').checked = data.item.is_spicy;
+                document.getElementById('editItemAvailable').checked = data.item.is_available;
+                
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('editItemModal'));
+                modal.show();
+            } else {
+                showAlert(data.error || 'Failed to load item', 'danger');
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            console.error('Error:', error);
+            showAlert('Failed to load item details', 'danger');
+        });
+    }
 }
 
 function toggleAvailability(itemId) {

@@ -139,36 +139,42 @@ def order_history(request):
     return render(request, "employee/order_history.html", context)
 
 
+# In apps/orders/views.py - Fix order_detail
 @login_required
 def order_detail(request, order_id):
-    """Return an HTML fragment for the modal or JSON data for AJAX."""
+    """Return order details for modal"""
     order = get_object_or_404(Order, id=order_id)
 
-    # Security: only employee who owns it or canteen_admin / superuser can view
-    if not (request.user == order.employee or is_canteen_admin(request.user) or request.user.is_superuser):
+    # Security check
+    if not (request.user == order.employee or is_canteen_admin(request.user)):
         return HttpResponseForbidden("Not allowed")
 
-    # If AJAX wanted JSON:
-    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+    # AJAX JSON response
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         items = [{
-            "name": it.menu_item.name,
-            "quantity": it.quantity,
-            "unit_price": float(it.unit_price),
-            "total": float(it.total)
-        } for it in order.items.all()]
-        data = {
+            "name": item.menu_item.name,
+            "quantity": item.quantity,
+            "unit_price": float(item.unit_price),
+            "total": float(item.total)
+        } for item in order.items.all()]
+        
+        return JsonResponse({
+            "success": True,
             "order_number": order.order_number,
-            "status": order.status,
+            "status": order.get_status_display(),
+            "customer_name": order.employee.get_full_name(),
+            "customer_email": order.email,
+            "customer_phone": order.phone_number,
+            "office_number": order.office_number,
             "items": items,
             "subtotal": float(order.subtotal),
             "total": float(order.total_amount),
-            "special_instructions": order.special_instructions,
-        }
-        return JsonResponse(data)
+            "special_instructions": order.special_instructions or "",
+            "created_at": order.created_at.strftime("%b %d, %Y %I:%M %p"),
+        })
 
-    # Otherwise render a template fragment for the modal (create partial at templates/orders/partials/order_detail.html)
+    # HTML fallback
     return render(request, "employee/order_detail.html", {"order": order})
-
 
 @login_required
 def quick_order(request, item_id=None):

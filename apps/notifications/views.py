@@ -118,16 +118,22 @@ def notifications_list(request):
     return render(request, 'employee/notifications.html', context)
 
 @login_required
-def mark_notification_read(request):
-        if request.method == 'POST':
-            notif_id = request.POST.get('id')
-        if not notif_id:
-            return HttpResponseBadRequest('Missing ID')
-        notif = get_object_or_404(UserNotification, id=notif_id, user=request.user)
-        notif.is_read = True
-        notif.save()
-        return JsonResponse({'success': True})
-        return HttpResponseBadRequest('Invalid request method')
+def mark_notification_read(request, notification_id):
+    """Mark single notification as read"""
+    if request.method == 'POST':
+        try:
+            notif = get_object_or_404(
+                UserNotification, 
+                id=notification_id, 
+                user=request.user
+            )
+            notif.is_read = True
+            notif.save()
+            return JsonResponse({'success': True})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)}, status=400)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
 @login_required
@@ -567,27 +573,38 @@ def create_notification_template(request):
 def notifications_page(request):
     if not (request.user.is_canteen_admin or request.user.is_superuser):
         return JsonResponse({'error': 'Unauthorized'}, status=403)
-    notifications = Notification.objects.annotate(recipients_count=Count('recipients')).order_by('-created_at')
+
+    # Correct: count related UserNotification records instead of "recipients"
+    notifications = Notification.objects.annotate(
+        recipients_count=Count('user_notifications')
+    ).order_by('-created_at')
+
     type_filter = request.GET.get('type', 'all')
     status_filter = request.GET.get('status', 'all')
+
     if type_filter != 'all':
         notifications = notifications.filter(notification_type=type_filter)
+
     if status_filter != 'all':
         notifications = notifications.filter(status=status_filter)
+
     paginator = Paginator(notifications, 20)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
+
     context = {
         'notifications': page_obj,
-        'total_sent': Notification.objects.filter(status='sent').count(),
-        'sent_today': Notification.objects.filter(status='sent', created_at__date=timezone.now().date()).count(),
+        'total_sent': Notification.objects.count(),
+        'sent_today': Notification.objects.filter(
+            created_at__date=timezone.now().date()
+        ).count(),
         'active_employees': User.objects.filter(is_active=True).count(),
-        'scheduled_notifications': Notification.objects.filter(status='scheduled').count(),
-        'departments': Department.objects.all(),
+        'scheduled_notifications': 0,  # since no scheduling
         'type_filter': type_filter,
         'status_filter': status_filter,
     }
-    return render(request, 'employee/notifications.html', context)
+    return render(request, 'canteen_admin/notifications.html', context)
+
 
 def send_order_notification(order, notification_type, additional_context=None):
     """
