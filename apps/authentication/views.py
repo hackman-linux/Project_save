@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.views.generic import View, TemplateView
 from django.http import JsonResponse, HttpResponseForbidden
@@ -11,6 +11,18 @@ from django.db.models import Count, Sum, Q, Avg
 from datetime import datetime, timedelta
 from decimal import Decimal
 from .models import SystemConfig
+
+from django.http import JsonResponse
+from django.template.loader import render_to_string
+from django.db.models import Q
+from django.shortcuts import render, get_object_or_404
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from django.template.loader import render_to_string
+import json
+
 from apps.reports.models import AuditLog
 
 from django.contrib.auth import get_user_model
@@ -24,6 +36,111 @@ from apps.orders.models import Order, OrderItem
 from apps.menu.models import MenuItem, MenuCategory
 from apps.payments.models import Payment, WalletTransaction
 from apps.notifications.models import Notification
+
+from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.http import JsonResponse, FileResponse, HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.core import serializers
+from django.utils import timezone
+from django.contrib import messages
+from decimal import Decimal
+import json
+import io
+import logging
+
+from .models import SystemConfig
+from apps.notifications.utils import (
+    test_email_connection,
+    send_test_email,
+    test_sms_connection,
+    send_test_sms,
+    EMAIL_PRESETS
+)
+
+logger = logging.getLogger(__name__)
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser or u.role == "system_admin")
+def filter_users(request):
+    search = request.GET.get("search", "").strip()
+    role = request.GET.get("role", "")
+    status = request.GET.get("status", "")
+
+    users = CustomUser.objects.all()
+
+    if search:
+        users = users.filter(
+            Q(username__icontains=search) |
+            Q(first_name__icontains=search) |
+            Q(last_name__icontains=search) |
+            Q(email__icontains=search)
+        )
+
+    if role:
+        users = users.filter(role=role)
+
+    if status:
+        if status == "active":
+            users = users.filter(is_active=True)
+        elif status == "inactive":
+            users = users.filter(is_active=False)
+
+    users_html = render_to_string(
+        "system_admin/user_table_body.html",
+        {"users": users},
+        request=request
+    )
+
+    return JsonResponse({
+        "html": users_html,
+        "count": users.count(),
+    })
+
+
+def user_details(request, user_id):
+    user = get_object_or_404(User, id=user_id)
+    html = render_to_string("system_admin/user_details.html", {"u": user})
+    return JsonResponse({"html": html})
+
+def edit_user(request, user_id):
+    user = get_object_or_404(User, id=user_id)
+    if request.method == "POST":
+        user.first_name = request.POST.get("first_name")
+        user.last_name = request.POST.get("last_name")
+        user.email = request.POST.get("email")
+        user.department = request.POST.get("department")
+        user.save()
+        return JsonResponse({"success": True})
+    html = render_to_string("system_admin/edit_user_form.html", {"u": user})
+    return JsonResponse({"html": html})
+
+@csrf_exempt
+def reset_user_password(request, user_id):
+    if request.method == "POST":
+        user = get_object_or_404(User, id=user_id)
+        data = json.loads(request.body)
+        user.password = make_password(data.get("password"))
+        user.save()
+        return JsonResponse({"success": True})
+    return JsonResponse({"success": False, "error": "Invalid request"})
+
+def user_bulk_action(request):
+    if request.method == "POST":
+        data = json.loads(request.body)
+        ids = data.get("ids", [])
+        action = data.get("action")
+        users = User.objects.filter(id__in=ids)
+
+        if action == "activate":
+            users.update(is_active=True)
+        elif action == "deactivate":
+            users.update(is_active=False)
+        elif action == "delete":
+            users.delete()
+
+        return JsonResponse({"success": True, "count": len(ids)})
+    return JsonResponse({"success": False})
 
 def login_view(request):
     if request.method == "POST":
@@ -435,7 +552,7 @@ def create_user_view(request):
     return redirect("system_admin:user_management")
 
 def is_system_admin(user):
-    return user.is_authenticated and user.role == "system_admin"
+    return user.is_authenticated and (user.is_superuser or user.role == "system_admin")
 
 
 def audit_logs_view(request):
@@ -624,14 +741,17 @@ def canteen_admin_dashboard_data(request):
     return JsonResponse(data)
 
 @login_required
+@user_passes_test(is_system_admin)
 def system_config(request):
     """System configuration page for system admins"""
-    if not request.user.is_system_admin():
-        return JsonResponse({'error': 'Unauthorized'}, status=403)
-
-    config, created = SystemConfig.objects.get_or_create(id=1)  # singleton pattern
-
-    return render(request, "system_admin/system_config.html", {"config": config})
+    config, created = SystemConfig.objects.get_or_create(id=1)
+    
+    context = {
+        'config': config,
+        'email_presets': EMAIL_PRESETS,
+    }
+    
+    return render(request, "system_admin/system_config.html", context)
 
 
 # Utility functions
@@ -662,3 +782,415 @@ def custom_403(request, exception):
 
 def language_switcher(request):
     return render(request, "language_switcher.html", {"redirect_to": request.GET.get("next", "/")})
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def save_config(request):
+    """Save system configuration"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        config, _ = SystemConfig.objects.get_or_create(id=1)
+        
+        # Parse JSON or form data
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+        else:
+            data = request.POST
+        
+        # General Settings
+        if 'app_name' in data:
+            config.app_name = data['app_name']
+        if 'timezone' in data:
+            config.timezone = data['timezone']
+        if 'currency' in data:
+            config.currency = data['currency']
+        if 'language' in data:
+            config.language = data['language']
+        
+        # Business Settings
+        if 'opening_time' in data:
+            config.opening_time = data['opening_time']
+        if 'closing_time' in data:
+            config.closing_time = data['closing_time']
+        if 'order_processing_time' in data:
+            config.order_processing_time = int(data['order_processing_time'])
+        if 'max_daily_orders' in data:
+            config.max_daily_orders = int(data['max_daily_orders'])
+        if 'cancellation_window' in data:
+            config.cancellation_window = int(data['cancellation_window'])
+        config.allow_advance_orders = data.get('allow_advance_orders', 'off') == 'on'
+        
+        # Payment Settings
+        config.mtn_enabled = data.get('mtn_enabled', 'off') == 'on'
+        if 'mtn_api_key' in data:
+            config.mtn_api_key = data['mtn_api_key']
+        if 'mtn_merchant_id' in data:
+            config.mtn_merchant_id = data['mtn_merchant_id']
+        if 'mtn_environment' in data:
+            config.mtn_environment = data['mtn_environment']
+        
+        config.orange_enabled = data.get('orange_enabled', 'off') == 'on'
+        if 'orange_api_key' in data:
+            config.orange_api_key = data['orange_api_key']
+        if 'orange_merchant_id' in data:
+            config.orange_merchant_id = data['orange_merchant_id']
+        if 'orange_environment' in data:
+            config.orange_environment = data['orange_environment']
+        
+        if 'payment_timeout' in data:
+            config.payment_timeout = int(data['payment_timeout'])
+        if 'transaction_fee' in data:
+            config.transaction_fee = Decimal(data['transaction_fee'])
+        if 'min_order_amount' in data:
+            config.min_order_amount = Decimal(data['min_order_amount'])
+        config.auto_refund = data.get('auto_refund', 'off') == 'on'
+        
+        # Email Settings
+        config.email_enabled = data.get('email_enabled', 'off') == 'on'
+        if 'smtp_server' in data:
+            config.smtp_server = data['smtp_server']
+        if 'smtp_port' in data:
+            config.smtp_port = int(data['smtp_port'])
+        if 'from_email' in data:
+            config.from_email = data['from_email']
+        if 'smtp_username' in data:
+            config.smtp_username = data['smtp_username']
+        if 'smtp_password' in data and data['smtp_password']:
+            config.smtp_password = data['smtp_password']
+        config.smtp_use_tls = data.get('smtp_use_tls', 'off') == 'on'
+        config.smtp_use_ssl = data.get('smtp_use_ssl', 'off') == 'on'
+        
+        # SMS Settings
+        config.sms_enabled = data.get('sms_enabled', 'off') == 'on'
+        if 'sms_provider' in data:
+            config.sms_provider = data['sms_provider']
+        if 'twilio_account_sid' in data:
+            config.twilio_account_sid = data['twilio_account_sid']
+        if 'twilio_auth_token' in data and data['twilio_auth_token']:
+            config.twilio_auth_token = data['twilio_auth_token']
+        if 'sms_from_number' in data:
+            config.sms_from_number = data['sms_from_number']
+        
+        # Push Notifications
+        config.push_enabled = data.get('push_enabled', 'off') == 'on'
+        if 'firebase_server_key' in data and data['firebase_server_key']:
+            config.firebase_server_key = data['firebase_server_key']
+        
+        # Notification Preferences
+        config.notify_order_placed = data.get('notify_order_placed', 'off') == 'on'
+        config.notify_order_ready = data.get('notify_order_ready', 'off') == 'on'
+        config.notify_payment_success = data.get('notify_payment_success', 'off') == 'on'
+        
+        # Security Settings
+        if 'session_timeout' in data:
+            config.session_timeout = int(data['session_timeout'])
+        if 'password_min_length' in data:
+            config.password_min_length = int(data['password_min_length'])
+        config.require_uppercase = data.get('require_uppercase', 'off') == 'on'
+        config.require_numbers = data.get('require_numbers', 'off') == 'on'
+        config.require_special_chars = data.get('require_special_chars', 'off') == 'on'
+        if 'max_login_attempts' in data:
+            config.max_login_attempts = int(data['max_login_attempts'])
+        if 'lockout_duration' in data:
+            config.lockout_duration = int(data['lockout_duration'])
+        config.enable_2fa = data.get('enable_2fa', 'off') == 'on'
+        config.log_security_events = data.get('log_security_events', 'off') == 'on'
+        config.require_password_change = data.get('require_password_change', 'off') == 'on'
+        
+        # Maintenance Settings
+        config.auto_backup = data.get('auto_backup', 'off') == 'on'
+        if 'backup_frequency' in data:
+            config.backup_frequency = data['backup_frequency']
+        if 'backup_time' in data:
+            config.backup_time = data['backup_time']
+        if 'backup_retention' in data:
+            config.backup_retention = int(data['backup_retention'])
+        config.performance_monitoring = data.get('performance_monitoring', 'off') == 'on'
+        if 'log_level' in data:
+            config.log_level = data['log_level']
+        if 'log_retention' in data:
+            config.log_retention = int(data['log_retention'])
+        config.email_alerts = data.get('email_alerts', 'off') == 'on'
+        config.maintenance_mode = data.get('maintenance_mode', 'off') == 'on'
+        if 'maintenance_message' in data:
+            config.maintenance_message = data['maintenance_message']
+        
+        config.save()
+        
+        logger.info(f"System configuration updated by {request.user.email}")
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Configuration saved successfully',
+            'updated_at': config.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error saving configuration: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error saving configuration: {str(e)}'
+        }, status=400)
+
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def reset_config(request):
+    """Reset configuration to defaults"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        # Delete existing config
+        SystemConfig.objects.filter(id=1).delete()
+        
+        # Create new default config
+        config = SystemConfig.objects.create(id=1)
+        
+        logger.info(f"System configuration reset to defaults by {request.user.email}")
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Configuration reset to defaults successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting configuration: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error resetting configuration: {str(e)}'
+        }, status=400)
+
+
+@login_required
+@user_passes_test(is_system_admin)
+def export_config(request):
+    """Export configuration as JSON"""
+    try:
+        config = SystemConfig.objects.get(id=1)
+        
+        # Create export data
+        export_data = {
+            'exported_at': timezone.now().isoformat(),
+            'exported_by': request.user.email,
+            'config': {
+                'app_name': config.app_name,
+                'app_version': config.app_version,
+                'timezone': config.timezone,
+                'currency': config.currency,
+                'language': config.language,
+                'opening_time': str(config.opening_time),
+                'closing_time': str(config.closing_time),
+                'order_processing_time': config.order_processing_time,
+                'max_daily_orders': config.max_daily_orders,
+                'cancellation_window': config.cancellation_window,
+                'allow_advance_orders': config.allow_advance_orders,
+                # Add other fields as needed (excluding sensitive data)
+            }
+        }
+        
+        # Create JSON file
+        json_data = json.dumps(export_data, indent=2)
+        
+        # Create response
+        response = HttpResponse(json_data, content_type='application/json')
+        response['Content-Disposition'] = f'attachment; filename="system_config_{timezone.now().strftime("%Y%m%d_%H%M%S")}.json"'
+        
+        logger.info(f"System configuration exported by {request.user.email}")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error exporting configuration: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error exporting configuration: {str(e)}'
+        }, status=400)
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def test_email_config(request):
+    """Test email configuration"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        config = SystemConfig.objects.get(id=1)
+        
+        # Test connection
+        success, message = test_email_connection(config)
+        
+        if success:
+            logger.info(f"Email connection test successful by {request.user.email}")
+            return JsonResponse({
+                'success': True,
+                'message': message
+            })
+        else:
+            logger.warning(f"Email connection test failed: {message}")
+            return JsonResponse({
+                'success': False,
+                'error': message
+            })
+            
+    except Exception as e:
+        logger.error(f"Error testing email configuration: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error testing email: {str(e)}'
+        }, status=400)
+
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def send_test_email_view(request):
+    """Send test email"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body) if request.content_type == 'application/json' else request.POST
+        to_email = data.get('to_email', request.user.email)
+        
+        config = SystemConfig.objects.get(id=1)
+        
+        # Send test email
+        success = send_test_email(to_email, config)
+        
+        if success:
+            logger.info(f"Test email sent to {to_email} by {request.user.email}")
+            return JsonResponse({
+                'success': True,
+                'message': f'Test email sent successfully to {to_email}'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': 'Failed to send test email. Please check your configuration.'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error sending test email: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error sending test email: {str(e)}'
+        }, status=400)
+
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def test_sms_config(request):
+    """Test SMS/Twilio configuration"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        config = SystemConfig.objects.get(id=1)
+        
+        # Test connection
+        success, message = test_sms_connection(config)
+        
+        if success:
+            logger.info(f"SMS connection test successful by {request.user.email}")
+            return JsonResponse({
+                'success': True,
+                'message': message
+            })
+        else:
+            logger.warning(f"SMS connection test failed: {message}")
+            return JsonResponse({
+                'success': False,
+                'error': message
+            })
+            
+    except Exception as e:
+        logger.error(f"Error testing SMS configuration: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error testing SMS: {str(e)}'
+        }, status=400)
+
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def send_test_sms_view(request):
+    """Send test SMS"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body) if request.content_type == 'application/json' else request.POST
+        to_phone = data.get('to_phone')
+        
+        if not to_phone:
+            return JsonResponse({
+                'success': False,
+                'error': 'Phone number is required'
+            }, status=400)
+        
+        config = SystemConfig.objects.get(id=1)
+        
+        # Send test SMS
+        success, message = send_test_sms(to_phone, config)
+        
+        if success:
+            logger.info(f"Test SMS sent to {to_phone} by {request.user.email}")
+            return JsonResponse({
+                'success': True,
+                'message': f'Test SMS sent successfully to {to_phone}'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': message
+            })
+            
+    except Exception as e:
+        logger.error(f"Error sending test SMS: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error sending test SMS: {str(e)}'
+        }, status=400)
+
+
+@csrf_exempt
+@login_required
+@user_passes_test(is_system_admin)
+def apply_email_preset(request):
+    """Apply email preset configuration"""
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Method not allowed'}, status=405)
+    
+    try:
+        data = json.loads(request.body) if request.content_type == 'application/json' else request.POST
+        provider = data.get('provider')
+        
+        if provider not in EMAIL_PRESETS:
+            return JsonResponse({
+                'success': False,
+                'error': 'Invalid email provider'
+            }, status=400)
+        
+        preset = EMAIL_PRESETS[provider]
+        
+        logger.info(f"Email preset '{provider}' applied by {request.user.email}")
+        
+        return JsonResponse({
+            'success': True,
+            'preset': preset
+        })
+        
+    except Exception as e:
+        logger.error(f"Error applying email preset: {str(e)}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'error': f'Error applying preset: {str(e)}'
+        }, status=400)

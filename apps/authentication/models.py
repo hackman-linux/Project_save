@@ -293,16 +293,16 @@ class SystemConfig(models.Model):
     # General settings
     app_name = models.CharField(max_length=100, default="Canteen Management System")
     app_version = models.CharField(max_length=20, default="1.0.0")
-    timezone = models.CharField(max_length=50, default="UTC")
+    timezone = models.CharField(max_length=50, default="Africa/Douala")
     currency = models.CharField(max_length=10, default="XAF")
     language = models.CharField(max_length=10, default="en")
 
     # Business settings
     opening_time = models.TimeField(default="08:00")
     closing_time = models.TimeField(default="18:00")
-    order_processing_time = models.IntegerField(default=15)
+    order_processing_time = models.IntegerField(default=15, help_text="Average time in minutes")
     max_daily_orders = models.IntegerField(default=200)
-    cancellation_window = models.IntegerField(default=10)
+    cancellation_window = models.IntegerField(default=10, help_text="Minutes before order can be cancelled")
     allow_advance_orders = models.BooleanField(default=True)
 
     # Payment settings
@@ -310,59 +310,140 @@ class SystemConfig(models.Model):
     mtn_api_key = models.CharField(max_length=255, blank=True, null=True)
     mtn_merchant_id = models.CharField(max_length=100, blank=True, null=True)
     mtn_environment = models.CharField(max_length=20, default="sandbox")
+    
     orange_enabled = models.BooleanField(default=False)
     orange_api_key = models.CharField(max_length=255, blank=True, null=True)
     orange_merchant_id = models.CharField(max_length=100, blank=True, null=True)
     orange_environment = models.CharField(max_length=20, default="sandbox")
-    payment_timeout = models.IntegerField(default=120)
+    
+    payment_timeout = models.IntegerField(default=120, help_text="Seconds")
     transaction_fee = models.DecimalField(max_digits=5, decimal_places=2, default=2.5)
     min_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=100)
     auto_refund = models.BooleanField(default=True)
 
-    # Notification settings
+    # Email notification settings
     email_enabled = models.BooleanField(default=True)
-    smtp_server = models.CharField(max_length=100, default="smtp.example.com")
+    smtp_server = models.CharField(max_length=100, default="smtp.gmail.com")
     smtp_port = models.IntegerField(default=587)
-    from_email = models.EmailField(default="admin@example.com")
+    smtp_use_tls = models.BooleanField(default=True)
+    smtp_use_ssl = models.BooleanField(default=False)
+    from_email = models.EmailField(default="noreply@canteen.com")
     smtp_username = models.CharField(max_length=100, blank=True, null=True)
-    smtp_password = models.CharField(max_length=100, blank=True, null=True)
+    smtp_password = models.CharField(max_length=255, blank=True, null=True)
+    
+    # SMS notification settings (Twilio)
     sms_enabled = models.BooleanField(default=False)
-    sms_provider = models.CharField(max_length=50, default="twilio")
-    sms_api_key = models.CharField(max_length=255, blank=True, null=True)
-    sms_from_number = models.CharField(max_length=20, blank=True, null=True)
+    sms_provider = models.CharField(max_length=50, default="twilio", choices=[
+        ('twilio', 'Twilio'),
+        ('nexmo', 'Nexmo/Vonage'),
+        ('local', 'Local Provider')
+    ])
+    twilio_account_sid = models.CharField(max_length=255, blank=True, null=True)
+    twilio_auth_token = models.CharField(max_length=255, blank=True, null=True)
+    sms_from_number = models.CharField(max_length=20, blank=True, null=True, help_text="E.164 format: +237XXXXXXXXX")
+    
+    # Push notifications
     push_enabled = models.BooleanField(default=False)
     firebase_server_key = models.CharField(max_length=255, blank=True, null=True)
 
+    # Notification preferences
+    notify_order_placed = models.BooleanField(default=True)
+    notify_order_ready = models.BooleanField(default=True)
+    notify_payment_success = models.BooleanField(default=True)
+    notify_order_cancelled = models.BooleanField(default=True)
+    notify_low_balance = models.BooleanField(default=True)
+
     # Security settings
-    session_timeout = models.IntegerField(default=60)
+    session_timeout = models.IntegerField(default=60, help_text="Minutes")
     password_min_length = models.IntegerField(default=8)
     require_uppercase = models.BooleanField(default=True)
     require_numbers = models.BooleanField(default=True)
     require_special_chars = models.BooleanField(default=False)
     max_login_attempts = models.IntegerField(default=5)
-    lockout_duration = models.IntegerField(default=15)
+    lockout_duration = models.IntegerField(default=15, help_text="Minutes")
     enable_2fa = models.BooleanField(default=False)
     log_security_events = models.BooleanField(default=True)
     require_password_change = models.BooleanField(default=False)
 
     # Maintenance settings
     auto_backup = models.BooleanField(default=True)
-    backup_frequency = models.CharField(max_length=20, default="daily")
+    backup_frequency = models.CharField(max_length=20, default="daily", choices=[
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('monthly', 'Monthly')
+    ])
     backup_time = models.TimeField(default="02:00")
-    backup_retention = models.IntegerField(default=30)
+    backup_retention = models.IntegerField(default=30, help_text="Days")
+    
     performance_monitoring = models.BooleanField(default=True)
-    log_level = models.CharField(max_length=20, default="INFO")
-    log_retention = models.IntegerField(default=30)
+    log_level = models.CharField(max_length=20, default="INFO", choices=[
+        ('DEBUG', 'Debug'),
+        ('INFO', 'Info'),
+        ('WARNING', 'Warning'),
+        ('ERROR', 'Error')
+    ])
+    log_retention = models.IntegerField(default=30, help_text="Days")
     email_alerts = models.BooleanField(default=True)
+    
     maintenance_mode = models.BooleanField(default=False)
-    maintenance_message = models.TextField(default="System under maintenance, please check back later.")
+    maintenance_message = models.TextField(
+        default="System under maintenance, please check back later."
+    )
 
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"SystemConfig (Last updated: {self.updated_at})"
-
 
     class Meta:
         verbose_name = "System Configuration"
         verbose_name_plural = "System Configuration"
+        db_table = "system_config"
+
+    def __str__(self):
+        return f"SystemConfig (Last updated: {self.updated_at})"
+
+    def get_smtp_settings(self):
+        """Get SMTP settings as dictionary"""
+        return {
+            'server': self.smtp_server,
+            'port': self.smtp_port,
+            'use_tls': self.smtp_use_tls,
+            'use_ssl': self.smtp_use_ssl,
+            'username': self.smtp_username,
+            'password': self.smtp_password,
+            'from_email': self.from_email,
+        }
+
+    def get_twilio_settings(self):
+        """Get Twilio settings as dictionary"""
+        return {
+            'account_sid': self.twilio_account_sid,
+            'auth_token': self.twilio_auth_token,
+            'from_number': self.sms_from_number,
+        }
+
+    def is_email_configured(self):
+        """Check if email is properly configured"""
+        return all([
+            self.email_enabled,
+            self.smtp_server,
+            self.smtp_port,
+            self.smtp_username,
+            self.smtp_password,
+            self.from_email
+        ])
+
+    def is_sms_configured(self):
+        """Check if SMS is properly configured"""
+        if self.sms_provider == 'twilio':
+            return all([
+                self.sms_enabled,
+                self.twilio_account_sid,
+                self.twilio_auth_token,
+                self.sms_from_number
+            ])
+        return False
+
+    def is_push_configured(self):
+        """Check if push notifications are configured"""
+        return self.push_enabled and self.firebase_server_key

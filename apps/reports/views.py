@@ -5,6 +5,9 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timedelta
 
+from django.contrib.auth.decorators import login_required
+from django.utils import timezone
+
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
@@ -223,18 +226,92 @@ def canteen_admin_reports(request):
 # ----------------------------------------------------------------------
 # System Admin Analytics View (for template rendering)
 # ----------------------------------------------------------------------
-from django.contrib.auth.decorators import login_required
+
 
 @login_required
 def system_admin_reports(request):
     """
     Render the System Admin Analytics dashboard page.
+    Includes all required context to prevent VariableDoesNotExist errors.
     """
     if not request.user.is_system_admin():
         return redirect('dashboard_redirect')
 
-    return render(request, 'system_admin/analytics.html')
+    today = timezone.now().date()
+    yesterday = today - timezone.timedelta(days=1)
 
+    # Today's orders
+    todays_orders = Order.objects.filter(created_at__date=today)
+    completed_orders = todays_orders.filter(status='completed')
+
+    # Yesterday's orders
+    yesterday_orders = Order.objects.filter(created_at__date=yesterday)
+    yesterday_completed = yesterday_orders.filter(status='completed')
+
+    # Revenue today
+    todays_revenue = completed_orders.aggregate(
+        total=Sum('total_amount')
+    )['total'] or Decimal('0.00')
+
+    # Revenue yesterday
+    yesterday_revenue = yesterday_completed.aggregate(
+        total=Sum('total_amount')
+    )['total'] or Decimal('0.00')
+
+    # Completion rate
+    if todays_orders.count() > 0:
+        completion_rate = (completed_orders.count() / todays_orders.count()) * 100
+    else:
+        completion_rate = 0
+
+    # Percentage difference vs yesterday
+    if yesterday_completed.count() > 0:
+        order_change = ((completed_orders.count() - yesterday_completed.count()) /
+                        yesterday_completed.count()) * 100
+    else:
+        order_change = 0
+
+    if yesterday_revenue > 0:
+        revenue_change = ((todays_revenue - yesterday_revenue) / yesterday_revenue) * 100
+    else:
+        revenue_change = 0
+
+    # Top menu items today
+    top_items = MenuItem.objects.filter(
+        order_items__order__created_at__date=today,
+        order_items__order__status='completed'
+    ).annotate(
+        orders_count=Count('order_items'),
+        revenue=Sum('order_items__unit_price' * 1)
+    ).order_by('-orders_count')[:5]
+
+    # Global statistics
+    total_users = User.objects.count()
+    active_users = User.objects.filter(status='active').count()
+    total_orders = Order.objects.count()
+    total_revenue = Order.objects.filter(
+        status='completed'
+    ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+
+    # Send everything to template
+    context = {
+        "todays_orders": todays_orders.count(),
+        "completed_today": completed_orders.count(),
+        "todays_revenue": todays_revenue,
+        "completion_rate": round(completion_rate, 1),
+        "order_change": round(order_change, 1),
+        "revenue_change": round(revenue_change, 1),
+
+        # Global stats
+        "total_users": total_users,
+        "active_users": active_users,
+        "total_orders": total_orders,
+        "total_revenue": total_revenue,
+
+        "top_items": top_items,
+    }
+
+    return render(request, "system_admin/analytics.html", context)
 
 # ----------------------------------------------------------------------
 # Note: All report generators are now standardized and arranged properly.

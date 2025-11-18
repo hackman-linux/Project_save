@@ -169,85 +169,9 @@
                         <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody id="usersTableBody">
-                    {% for user in users %}
-                    <tr data-user-id="{{ user.id }}" class="user-row">
-                        <td>
-                            <input type="checkbox" class="form-check-input user-checkbox" value="{{ user.id }}">
-                        </td>
-                        <td>
-                            <div class="d-flex align-items-center">
-                                <div class="user-avatar me-3">
-                                    <i class="bi bi-person-circle text-primary fs-4"></i>
-                                </div>
-                                <div>
-                                    <h6 class="mb-0">{{ user.first_name }} {{ user.last_name }}</h6>
-                                    <small class="text-muted">@{{ user.username }}</small>
-                                    {% if user.email %}
-                                        <br><small class="text-muted">{{ user.email }}</small>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </td>
-                        <td>
-                            <span class="badge bg-{{ user.role_color }} fs-6">
-                                {{ user.get_role_display }}
-                            </span>
-                        </td>
-                        <td>{{ user.department|default:"Not assigned" }}</td>
-                        <td>
-                            {% if user.is_active %}
-                                <span class="badge bg-success">Active</span>
-                            {% else %}
-                                <span class="badge bg-danger">Inactive</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if user.last_login %}
-                                <span class="text-muted">{{ user.last_login|timesince }} ago</span>
-                            {% else %}
-                                <span class="text-muted">Never</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <span class="text-muted">{{ user.date_joined|date:"M d, Y" }}</span>
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-primary" 
-                                        onclick="viewUser({{ user.id }})" 
-                                        title="View Details">
-                                    <i class="bi bi-eye"></i>
-                                </button>
-                                <button class="btn btn-outline-warning" 
-                                        onclick="editUser({{ user.id }})" 
-                                        title="Edit User">
-                                    <i class="bi bi-pencil"></i>
-                                </button>
-                                <button class="btn btn-outline-info" 
-                                        onclick="resetPassword({{ user.id }})" 
-                                        title="Reset Password">
-                                    <i class="bi bi-key"></i>
-                                </button>
-                                {% if user.role != 'system_admin' %}
-                                <button class="btn btn-outline-danger" 
-                                        onclick="toggleUserStatus({{ user.id }}, {{ user.is_active|yesno:'false,true' }})" 
-                                        title="{% if user.is_active %}Deactivate{% else %}Activate{% endif %} User">
-                                    <i class="bi bi-{% if user.is_active %}x-circle{% else %}check-circle{% endif %}"></i>
-                                </button>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="8" class="text-center py-4 text-muted">
-                            <i class="bi bi-people fs-1"></i>
-                            <p class="mt-2">No users found</p>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
+             <tbody id="userTableBody">
+    {% include "system_admin/user_table_body.html" with users=users %}
+</tbody>
             </table>
         </div>
 
@@ -781,198 +705,215 @@ class UserManager {
     }
 }
 
-// Global functions for button actions
+// ----- Helper: build correct base path -----
+const BASE_ADMIN_PATH = '/system-admin';
+
+function showErrorInModal(containerId, msg) {
+    document.getElementById(containerId).innerHTML = `<div class="alert alert-danger">${msg}</div>`;
+}
+
+// View details
 function viewUser(userId) {
-    const modal = new bootstrap.Modal(document.getElementById('userDetailsModal'));
-    modal.show();
-}
-
-function editUser(userId) {
-    const modal = new bootstrap.Modal(document.getElementById('editUserModal'));
-    modal.show();
-}
-
-function resetPassword(userId) {
-    const form = document.getElementById('resetPasswordForm');
-    form.dataset.userId = userId;
-    const modal = new bootstrap.Modal(document.getElementById('resetPasswordModal'));
-    modal.show();
-}
-
-function toggleUserStatus(userId, activate) {
-    if (confirm(`Are you sure you want to ${activate ? 'activate' : 'deactivate'} this user?`)) {
-        // Handle status toggle
-        console.log(`Toggle user ${userId} to ${activate ? 'active' : 'inactive'}`);
-    }
-}
-
-function exportUsers() {
-    window.location.href = '/api/system-admin/export-users/';
-}
-
-function refreshUserList() {
-    window.location.reload();
-}
-
-function togglePasswordVisibility(inputId) {
-    const input = document.getElementById(inputId);
-    const icon = input.nextElementSibling.querySelector('i');
-    
-    if (input.type === 'password') {
-        input.type = 'text';
-        icon.className = 'bi bi-eye-slash';
-    } else {
-        input.type = 'password';
-        icon.className = 'bi bi-eye';
-    }
-}
-
-function generatePassword() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
-    let password = '';
-    for (let i = 0; i < 12; i++) {
-        password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    document.getElementById('password').value = password;
-    document.getElementById('password').dispatchEvent(new Event('input'));
-}
-
-function generatePasswordReset() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
-    let password = '';
-    for (let i = 0; i < 12; i++) {
-        password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    document.getElementById('new_password_reset').value = password;
-}
-
-// Initialize UserManager when DOM is loaded
-document.addEventListener('DOMContentLoaded', function() {
-    new UserManager();
-});
-function viewUser(userId) {
-    const modal = new bootstrap.Modal(document.getElementById('userDetailsModal'));
+    const modalEl = document.getElementById('userDetailsModal');
+    const modal = new bootstrap.Modal(modalEl);
+    // show loading spinner
+    document.getElementById('userDetailsContent').innerHTML = '<div class="text-center py-4"><div class="spinner-border" role="status"></div></div>';
     modal.show();
 
-    fetch(`/system_admin/user/${userId}/details/`)
-        .then(res => res.text())
-        .then(html => {
-            document.getElementById('userDetailsContent').innerHTML = html;
+    fetch(`${BASE_ADMIN_PATH}/user/${userId}/details/`)
+        .then(r => {
+            if (!r.ok) throw new Error('Network error');
+            return r.json();
         })
-        .catch(() => {
-            document.getElementById('userDetailsContent').innerHTML =
-                '<div class="alert alert-danger">Failed to load user details.</div>';
+        .then(data => {
+            document.getElementById("userDetailsContent").innerHTML = data.html || '<div class="alert alert-warning">No details returned</div>';
+        })
+        .catch(err => {
+            showErrorInModal('userDetailsContent', 'Failed to load user details.');
+            console.error(err);
         });
 }
 
+// Edit user
 function editUser(userId) {
-    const modal = new bootstrap.Modal(document.getElementById('editUserModal'));
+    const modalEl = document.getElementById('editUserModal');
+    const modal = new bootstrap.Modal(modalEl);
+    document.getElementById('editUserContent').innerHTML = '<div class="text-center py-4"><div class="spinner-border" role="status"></div></div>';
     modal.show();
 
-    fetch(`/system_admin/user/${userId}/edit/`)
-        .then(res => res.text())
-        .then(html => {
-            document.getElementById('editUserContent').innerHTML = html;
-
-            // Attach submit handler dynamically
-            const form = document.querySelector('#editUserContent form');
-            form.addEventListener('submit', function(e) {
-                e.preventDefault();
-                const formData = new FormData(form);
-
-                fetch(`/system_admin/user/${userId}/edit/`, {
-                    method: 'POST',
-                    body: formData,
-                    headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value }
-                })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        modal.hide();
-                        refreshUserList(); // reloads the table
-                    } else {
-                        alert('Error updating user');
-                    }
-                });
-            });
+    fetch(`${BASE_ADMIN_PATH}/user/${userId}/edit/`)
+        .then(r => {
+            if (!r.ok) throw new Error('Network error');
+            return r.json();
+        })
+        .then(data => {
+            document.getElementById("editUserContent").innerHTML = data.html || '<div class="alert alert-warning">No form returned</div>';
+            // attach submit handler
+            const form = document.getElementById('editUserForm');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    const formData = new FormData(form);
+                    fetch(`${BASE_ADMIN_PATH}/user/${userId}/edit/`, {
+                        method: 'POST',
+                        body: formData,
+                        headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || '' }
+                    })
+                    .then(r => r.json())
+                    .then(resp => {
+                        if (resp.success) {
+                            modal.hide();
+                            refreshUserList();
+                        } else {
+                            // render errors if provided
+                            if (resp.html) {
+                                document.getElementById("editUserContent").innerHTML = resp.html;
+                            } else {
+                                alert('Failed to update user');
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Error submitting edit form');
+                    });
+                }, { once: true });
+            }
+        })
+        .catch(err => {
+            showErrorInModal('editUserContent', 'Failed to load edit form.');
+            console.error(err);
         });
 }
 
+// Reset password
 function resetPassword(userId) {
-    const modal = new bootstrap.Modal(document.getElementById('resetPasswordModal'));
+    const modalEl = document.getElementById('resetPasswordModal');
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
 
     const form = document.getElementById('resetPasswordForm');
+    // ensure previous handler removed
+    form.onsubmit = null;
     form.onsubmit = function(e) {
         e.preventDefault();
         const password = document.getElementById('new_password_reset').value;
-        const forceChange = document.getElementById('force_password_change').checked;
-
-        fetch(`/system_admin/user/${userId}/reset-password/`, {
+        const force = document.getElementById('force_password_change').checked;
+        fetch(`${BASE_ADMIN_PATH}/user/${userId}/reset-password/`, {
             method: 'POST',
-            body: JSON.stringify({ password, force_change: forceChange }),
+            body: JSON.stringify({ password, force_change: force }),
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || ''
             }
         })
-        .then(res => res.json())
+        .then(r => r.json())
         .then(data => {
             if (data.success) {
                 modal.hide();
-                alert('Password reset successfully!');
+                alert('Password reset successfully');
             } else {
-                alert('Error resetting password');
+                alert(data.error || 'Password reset failed');
             }
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Error resetting password');
         });
     };
 }
 
+// Toggle single user status (activate/deactivate)
 function toggleUserStatus(userId, currentlyActive) {
     const action = currentlyActive ? 'deactivate' : 'activate';
     if (!confirm(`Are you sure you want to ${action} this user?`)) return;
-
-    fetch(`/system_admin/user/${userId}/toggle-status/`, {
+    fetch(`${BASE_ADMIN_PATH}/user/${userId}/toggle-status/`, {
         method: 'POST',
-        headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value }
+        headers: { 'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || '' }
     })
-    .then(res => res.json())
+    .then(r => r.json())
     .then(data => {
-        if (data.success) {
-            refreshUserList();
-        } else {
-            alert('Error updating user status');
-        }
+        if (data.success) refreshUserList();
+        else alert('Error updating user status');
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Network error toggling status');
     });
 }
 
+// Bulk actions (activate/deactivate/delete)
 function bulkAction(action) {
-    const selected = Array.from(document.querySelectorAll('.user-checkbox:checked'))
-                          .map(cb => cb.value);
-    if (selected.length === 0) {
-        alert('Please select at least one user.');
-        return;
-    }
+    const ids = Array.from(document.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
+    if (!ids.length) { alert('Please select at least one user.'); return; }
+    if (!confirm(`Are you sure you want to ${action} ${ids.length} user(s)?`)) return;
 
-    if (!confirm(`Are you sure you want to ${action} ${selected.length} users?`)) return;
-
-    fetch(`/system_admin/users/bulk-${action}/`, {
+    fetch(`${BASE_ADMIN_PATH}/users/bulk-action/`, {
         method: 'POST',
-        body: JSON.stringify({ user_ids: selected }),
+        body: JSON.stringify({ ids, action }),
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]')?.value || ''
         }
     })
-    .then(res => res.json())
+    .then(r => r.json())
     .then(data => {
         if (data.success) {
+            alert(`${action} successful for ${data.count} user(s)`);
             refreshUserList();
         } else {
             alert('Bulk action failed');
         }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Network error performing bulk action');
     });
 }
+// Wait until DOM is ready
+document.addEventListener("DOMContentLoaded", function () {
+    const searchInput = document.getElementById("searchUsers");
+    const roleFilter = document.getElementById("filterByRole");
+    const statusFilter = document.getElementById("filterByStatus");
+
+    // debounce search to avoid spamming requests
+    let searchTimeout;
+    searchInput.addEventListener("input", () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(applyFilters, 300);
+    });
+
+    // Filter on select change
+    roleFilter.addEventListener("change", applyFilters);
+    statusFilter.addEventListener("change", applyFilters);
+
+    // Apply filters
+    function applyFilters() {
+        const query = searchInput.value.trim();
+        const role = roleFilter.value;
+        const status = statusFilter.value;
+
+        const params = new URLSearchParams({
+            search: query,
+            role: role,
+            status: status
+        });
+
+        fetch(`/system-admin/user-management/filter/?${params.toString()}`)
+            .then(response => {
+                if (!response.ok) throw new Error("Network error while filtering");
+                return response.json();
+            })
+            .then(data => {
+                // Replace user table body dynamically
+                document.getElementById("userTableBody").innerHTML = data.html;
+                document.getElementById("userCount").textContent = data.count;
+            })
+            .catch(err => {
+                console.error(err);
+            });
+    }
+});
 
 </script>
 {% endblock %}

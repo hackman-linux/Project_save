@@ -1,0 +1,8 @@
+<div>
+  <h5>{{ u.first_name }} {{ u.last_name }}</h5>
+  <p><strong>Username:</strong> {{ u.username }}</p>
+  <p><strong>Email:</strong> {{ u.email|default:"No email" }}</p>
+  <p><strong>Role:</strong> {{ u.get_role_display }}</p>
+  <p><strong>Status:</strong> {{ u.is_active|yesno:"Active,Inactive" }}</p>
+  <p><strong>Joined:</strong> {{ u.date_joined|date:"M d, Y" }}</p>
+</div>

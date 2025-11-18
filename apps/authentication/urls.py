@@ -72,6 +72,32 @@ system_admin_urlpatterns = [
     path('analytics/', reports_views.system_admin_reports, name='analytics'),
     path("audit-logs/", views.audit_logs_view, name="audit_logs"),
     path('counts/', orders_views.order_counts, name='order_counts'),
+    path("user/<uuid:user_id>/details/", views.user_details, name="user_details"),
+    path("user/<uuid:user_id>/edit/", views.edit_user, name="edit_user"),
+    path("user/<uuid:user_id>/reset-password/", views.reset_user_password, name="reset_user_password"),
+    path("users/bulk-action/", views.user_bulk_action, name="user_bulk_action"),
+    path("user-management/filter/", views.filter_users, name="filter_users"),
+    # Config API endpoints
+    path('config/save/', views.save_config, name='save_config'),
+    path('config/reset/', views.reset_config, name='reset_config'),
+    path('config/export/', views.export_config, name='export_config'),
+
+
+    # # Config API endpoints
+    # path('config/save/', views.save_config, name='save_config'),
+    # path('config/reset/', views.reset_config, name='reset_config'),
+    # path('config/export/', views.export_config, name='export_config'),
+    
+    # Email Testing
+    path('config/test-email/', views.test_email_config, name='test_email_config'),
+    path('config/send-test-email/', views.send_test_email_view, name='send_test_email'),
+    path('config/apply-email-preset/', views.apply_email_preset, name='apply_email_preset'),
+    
+    # SMS Testing
+    path('config/test-sms/', views.test_sms_config, name='test_sms_config'),
+    path('config/send-test-sms/', views.send_test_sms_view, name='send_test_sms'),
+
+
 ]
 
 # Include role-specific URLs with namespace

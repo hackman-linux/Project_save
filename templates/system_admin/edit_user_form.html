@@ -1,0 +1,20 @@
+<form id="editUserForm">
+  {% csrf_token %}
+  <div class="mb-3">
+    <label class="form-label">First Name</label>
+    <input type="text" class="form-control" name="first_name" value="{{ u.first_name }}">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Last Name</label>
+    <input type="text" class="form-control" name="last_name" value="{{ u.last_name }}">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Email</label>
+    <input type="email" class="form-control" name="email" value="{{ u.email }}">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Department</label>
+    <input type="text" class="form-control" name="department" value="{{ u.department }}">
+  </div>
+  <button class="btn btn-success w-100">Save Changes</button>
+</form>
